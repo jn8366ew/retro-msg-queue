@@ -1,0 +1,47 @@
+# --- 이 프로젝트 ---
+.env
+insurance_message_queue_interview_notes_2026-09-16.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# --- Windows ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# --- JetBrains (IntelliJ IDEA, PyCharm) ---
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# --- VS Code ---
+.vscode/
+*.code-workspace
+.history/
+
+# --- Cursor ---
+.cursor/
+.cursorignore
+.cursorindexingignore

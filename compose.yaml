@@ -1,0 +1,34 @@
+name: retro-msg-queue
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./compose/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      # 장애 주입 플래그는 셸 env로 덮어쓸 수 있다: $env:API_CRASH_BEFORE_OUTBOX="1"; docker compose up -d --force-recreate api
+      API_CRASH_BEFORE_OUTBOX: ${API_CRASH_BEFORE_OUTBOX:-0}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

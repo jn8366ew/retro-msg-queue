@@ -6,23 +6,23 @@
 
 ## 0. 사전 준비
 
-- [ ] Docker Desktop 기동 (`docker info` 성공)
-- [ ] `git init` → 첫 커밋: `dev-plan.md`, `roadmap.md`, `insurance_message_queue_interview_notes_2026-09-16.md` (R8)
-- [ ] 패키지 최신 안정판 재조회 → `requirements.txt` `==` 핀, README 버전 표 (§12)
+- [x] Docker Desktop 기동 (`docker info` 성공)
+- [x] `git init` → 첫 커밋: `dev-plan.md`, `roadmap.md`, `insurance_message_queue_interview_notes_2026-09-16.md` (R8)
+- [x] 패키지 최신 안정판 재조회 → `requirements.txt` `==` 핀, README 버전 표 (§12)
 
 ## 1단계 — 접수·조회·롤백 (워커·발행자 없음)
 
-- [ ] `.gitignore`, `.gitattributes`(R7), `.env.example` → `.env`, `pyproject.toml`
-- [ ] `Dockerfile`: python:3.12-slim, pycurl 빌드 의존성(R15), `COPY app/ experiments/ tests/`, `PYTHONUNBUFFERED=1`
-- [ ] `compose.yaml`: postgres(healthcheck R2, `pgdata`, initdb로 `app_test` R5) + api(`restart: "no"`, exec 형식 command)
-- [ ] `app/config.py`(os.environ, R4), `app/db.py`(advisory lock `init_db`, R1), `app/models.py`(§4)
-- [ ] `app/main.py`: `POST /jobs`, `GET /jobs/{id}`, `API_CRASH_BEFORE_OUTBOX` (§5)
-- [ ] `experiments/run.py`: `create`, `get`, `count`
-- [ ] `tests/test_api.py`: 202 / 200 동일 / 409 / 500 롤백 / 404 통과
-- [ ] **E7** 실행 → `reports/E7-<날짜>-1.md`
-- [ ] **E2** 실행 → `reports/E2-<날짜>-1.md` (브로커 항목은 구조적 보장으로 명시)
-- [ ] README 초안: 실행 방법, 버전 표, 결정 기록 R1~R8
-- [ ] `git commit -m "step 1: ..."`
+- [x] `.gitignore`, `.gitattributes`(R7), `.env.example` → `.env`, `pyproject.toml`
+- [x] `Dockerfile`: python:3.12-slim, pycurl 빌드 의존성(R15), `COPY app/ experiments/ tests/`, `PYTHONUNBUFFERED=1`
+- [x] `compose.yaml`: postgres(healthcheck R2, `pgdata`, initdb로 `app_test` R5) + api(`restart: "no"`, exec 형식 command)
+- [x] `app/config.py`(os.environ, R4), `app/db.py`(advisory lock `init_db`, R1), `app/models.py`(§4)
+- [x] `app/main.py`: `POST /jobs`, `GET /jobs/{id}`, `API_CRASH_BEFORE_OUTBOX` (§5)
+- [x] `experiments/run.py`: `create`, `get`, `count`
+- [x] `tests/test_api.py`: 202 / 200 동일 / 409 / 500 롤백 / 404 통과
+- [x] **E7** 실행 → `reports/E7-<날짜>-1.md`
+- [x] **E2** 실행 → `reports/E2-<날짜>-1.md` (브로커 항목은 구조적 보장으로 명시)
+- [x] README 초안: 실행 방법, 버전 표, 결정 기록 R1~R8
+- [x] `git commit -m "step 1: ..."`
 
 ## 2단계 — 브로커·워커·발행자 (정상 흐름)
 
