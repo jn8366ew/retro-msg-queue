@@ -6,7 +6,7 @@
 - 진행 상태: [`roadmap.md`](roadmap.md)
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
 
-**현재 2단계 완료.** 접수·조회·롤백·중복 접수 + 브로커·발행자·워커 정상 흐름까지. 장애 주입·대조군은 3단계.
+**현재 3단계 완료.** 정상 흐름 + 장애 주입(발행자 중단·브로커 장애) + E0 대조군까지. 중단·중복 실험은 4단계.
 
 ---
 
@@ -84,7 +84,7 @@ flowchart TD
 
 ### E0 대조군 — 아웃박스가 산 것
 
-과거 보험 프로젝트는 왼쪽이었다. "가입은 저장됐는데 증권 작업은 흔적도 없이 사라지고, 오류 알림조차 없어 탐지할 근거가 없었다"(면접 정리 8.7절). 3단계에서 둘을 같은 조건으로 돌려 비교한다.
+과거 보험 프로젝트는 왼쪽이었다. "가입은 저장됐는데 증권 작업은 흔적도 없이 사라지고, 오류 알림조차 없어 탐지할 근거가 없었다"(면접 정리 8.7절). 둘을 같은 조건으로 돌린 결과가 [E0](reports/E0-20260920-1.md)와 [E3](reports/E3-20260920-1.md)다 — 왼쪽은 모든 서비스가 복구된 뒤에도 영구 PENDING, 오른쪽은 프로세스 재시작만으로 1.3초 만에 DONE.
 
 ```mermaid
 flowchart LR
@@ -195,7 +195,17 @@ docker compose exec api python experiments/run.py count `
 docker compose exec api python experiments/run.py wait --job-id 1 --timeout 30
 ```
 
-`republish`·`backlog`는 3단계에서 추가한다.
+적체 관측 (읽기 전용):
+
+```powershell
+docker compose exec api python experiments/run.py backlog
+```
+
+같은 이벤트를 수동 재발행 (outbox 상태는 건드리지 않는다):
+
+```powershell
+docker compose exec api python experiments/run.py republish --event-id 1
+```
 
 ### DB 직접 조회
 
@@ -249,6 +259,69 @@ docker compose exec api python experiments/run.py create `
 ```
 
 플래그는 셸 환경변수로만 켠다. HTTP로 켜고 끄는 경로는 만들지 않는다 (dev-plan §12).
+
+### 장애 주입 (E3 · E4)
+
+발행자를 멈춘다. 접수는 계속 202이고 `outbox_events`에 PENDING이 쌓인다:
+
+```powershell
+docker compose stop publisher
+```
+
+```powershell
+docker compose exec api python experiments/run.py backlog
+```
+
+재시작하면 밀린 것을 자동으로 집어간다:
+
+```powershell
+docker compose start publisher
+```
+
+브로커를 멈춘다. 접수는 여전히 202이고 `attempts`·`last_error`가 쌓인다:
+
+```powershell
+docker compose stop redis
+```
+
+5~15초 뒤에 보면 `attempts≥2`다:
+
+```powershell
+docker compose exec api python experiments/run.py get --job-id 1
+```
+
+```powershell
+docker compose start redis
+```
+
+### E0 대조군 (아웃박스 없는 과거 방식)
+
+두 플래그를 켜면 API가 `outbox_events` 없이 커밋하고, 커밋과 발행 사이에 죽는다:
+
+```powershell
+$env:LEGACY_INLINE_PUBLISH="1"; $env:API_CRASH_AFTER_COMMIT="1"
+docker compose --profile redis up -d --force-recreate api
+```
+
+api가 죽을 것이므로 요청은 다른 컨테이너에서 보낸다:
+
+```powershell
+docker compose exec publisher python experiments/run.py create `
+  --request-key legacy-001 --value 7
+```
+
+`NO RESPONSE`가 나온다. 남은 흔적을 확인한다 — `jobs` 행만 있고 `outbox_pending`은 0이다:
+
+```powershell
+docker compose exec publisher python experiments/run.py backlog
+```
+
+플래그를 끄고 복구해도 그 행은 영원히 PENDING이다:
+
+```powershell
+Remove-Item Env:\LEGACY_INLINE_PUBLISH; Remove-Item Env:\API_CRASH_AFTER_COMMIT
+docker compose --profile redis up -d --force-recreate api
+```
 
 ### 정리
 
@@ -346,11 +419,11 @@ dev-plan §7 "2단계 검증 항목". `max_retries: 0`을 적용하기 **전에*
 
 | # | 실험 | 상태 | 리포트 |
 |---|---|---|---|
-| E0 | 대조군 — 아웃박스 없는 과거 방식 | 3단계 | — |
+| E0 | 대조군 — 아웃박스 없는 과거 방식 | **통과** | [E0-20260920-1](reports/E0-20260920-1.md) |
 | E1 | 정상 흐름 | **통과** | [E1-20260920-1](reports/E1-20260920-1.md) |
 | E2 | 트랜잭션 롤백 | **통과** | [E2-20260920-1](reports/E2-20260920-1.md) |
-| E3 | 발행자 중단 | 3단계 | — |
-| E4 | 브로커 접속 실패 | 3단계 | — |
+| E3 | 발행자 중단 | **통과** | [E3-20260920-1](reports/E3-20260920-1.md) |
+| E4 | 브로커 접속 실패 | **통과** | [E4-20260920-1](reports/E4-20260920-1.md) |
 | E5 | 발행 후 기록 전 중단 | 4단계 | — |
 | E6 | 중복 전달 (직렬) | 4단계 | — |
 | E6b | 중복 전달 (동시, concurrency=2) | 4단계 | — |

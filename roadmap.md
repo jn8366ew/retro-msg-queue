@@ -40,13 +40,13 @@
 
 ## 3단계 — 장애 주입·대조군·관측
 
-- [ ] `PUBLISHER_CRASH_AFTER_SEND` (§6)
-- [ ] E0 플래그 `LEGACY_INLINE_PUBLISH`, `API_CRASH_AFTER_COMMIT` (R12), GET `outbox: null`
-- [ ] `run.py republish`, `run.py backlog` (U3)
-- [ ] **E0** 실행 → 리포트 (jobs.PENDING만, `outbox: null`, backlog 0, 브로커 0, 워커 로그 없음)
-- [ ] **E3** 실행 → 리포트 (PENDING/PENDING → backlog 1 → 재시작 후 SENT·DONE)
-- [ ] **E4** 실행 → 리포트 (attempts≥2, last_error, 복구 후 전달)
-- [ ] `git commit -m "step 3: ..."`
+- [x] `PUBLISHER_CRASH_AFTER_SEND` (§6)
+- [x] E0 플래그 `LEGACY_INLINE_PUBLISH`, `API_CRASH_AFTER_COMMIT` (R12), GET `outbox: null`
+- [x] `run.py republish`, `run.py backlog` (U3)
+- [x] **E0** 실행 → 리포트 (jobs.PENDING만, `outbox: null`, backlog 0, 브로커 0, 워커 로그 없음)
+- [x] **E3** 실행 → 리포트 (PENDING/PENDING → backlog 1 → 재시작 후 SENT·DONE)
+- [x] **E4** 실행 → 리포트 (attempts≥2, last_error, 복구 후 전달)
+- [x] `git commit -m "step 3: ..."`
 
 ## 4단계 — 중단·중복
 

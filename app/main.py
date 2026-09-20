@@ -5,6 +5,7 @@ API는 브로커에 연결하지 않는다 (E0 대조군 경로는 3단계에서
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -85,10 +86,37 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="retro-msg-queue", lifespan=lifespan)
 
 
+def _create_legacy(input_doc: dict, request_key: str) -> JSONResponse:
+    """E0 대조군 — 아웃박스 없는 과거 방식. 정상 경로가 아니다 (R12).
+
+    커밋 후 API가 직접 apply_async 한다. 커밋과 발행 사이에 중단되면 jobs 행만 남고
+    발행 의도 기록도 오류 로그도 없다 — 면접 정리 8.7절 "탐지 근거가 없었다"의 재현.
+    """
+    with session_scope() as s:
+        job = Job(request_key=request_key, input=input_doc, status="PENDING")
+        s.add(job)
+        s.flush()
+        job_id = job.id
+    log.info(kv("legacy_committed", job_id=job_id, request_key=request_key))
+
+    if settings.api_crash_after_commit:
+        log.error(kv("injected_crash", job_id=job_id, flag="API_CRASH_AFTER_COMMIT"))
+        os._exit(1)  # 커밋 후·발행 전 중단. 응답도 발행도 없다
+
+    from .tasks import send_compute  # 정상 경로는 브로커를 임포트하지 않는다
+
+    task_id = send_compute(job_id, None)  # event_id 없음 — 아웃박스가 없으니까
+    log.info(kv("legacy_published", job_id=job_id, task_id=task_id))
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "PENDING"})
+
+
 @app.post("/jobs", response_model=JobAccepted, status_code=202, responses={200: {"model": JobDetail}})
 def create_job(body: JobCreate):
     input_doc = {"value": body.value}
     try:
+        if settings.legacy_inline_publish:
+            return _create_legacy(input_doc, body.request_key)
+
         with session_scope() as s:
             job = Job(request_key=body.request_key, input=input_doc, status="PENDING")
             s.add(job)
