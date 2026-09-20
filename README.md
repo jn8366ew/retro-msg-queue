@@ -86,21 +86,47 @@ flowchart TD
 
 과거 보험 프로젝트는 왼쪽이었다. "가입은 저장됐는데 증권 작업은 흔적도 없이 사라지고, 오류 알림조차 없어 탐지할 근거가 없었다"(면접 정리 8.7절). 둘을 같은 조건으로 돌린 결과가 [E0](reports/E0-20260920-1.md)와 [E3](reports/E3-20260920-1.md)다 — 왼쪽은 모든 서비스가 복구된 뒤에도 영구 PENDING, 오른쪽은 프로세스 재시작만으로 1.3초 만에 DONE.
 
+**두 실험의 중단 지점이 다르다.** E0은 api가 죽고, E3은 발행자가 죽는다. 그런데도 E0 쪽이 더 나쁘다 — **E0에서는 발행자가 처음부터 끝까지 멀쩡히 살아 1초마다 폴링하고 있는데도** 그 행을 영원히 못 본다. 조회 대상 자체가 없기 때문이다.
+
 ```mermaid
-flowchart LR
-    subgraph LEGACY["E0 · 아웃박스 없음 (과거 방식)"]
+flowchart TB
+    subgraph LEGACY["E0 · 아웃박스 없음 — api 중단"]
         direction TB
-        A1["jobs INSERT"] --> A2["COMMIT"]
-        A2 --> A3["api가 직접 apply_async"]
-        A2 -.커밋 후 중단.-> A4["jobs 행만 존재<br/>발행 의도 기록 없음<br/>오류 로그 없음<br/><b>탐지 근거 없음</b>"]
+        A1["jobs INSERT"] --> A2["COMMIT ✔"]
+        A2 -.커밋 후 중단.-> AX["os._exit(1)<br/>클라이언트: NO RESPONSE"]
+        A2 --> A3["api가 직접 apply_async<br/>(실행되지 못함)"]
+        AX --> A4["DB: jobs 1행<br/>outbox 행 없음"]
+        A4 --> A5["발행자는 계속 살아 있다<br/>SELECT WHERE status='PENDING'<br/>1초마다 · 지금도"]
+        A5 -->|"조회 대상 없음"| A5
+        A5 --> A6["<b>영구 PENDING</b><br/>사람이 찾아내야 한다"]
     end
-    subgraph OUTBOX["E3 · 아웃박스"]
+    subgraph OUTBOX["E3 · 아웃박스 — 발행자 중단"]
         direction TB
-        B1["jobs + outbox INSERT"] --> B2["COMMIT"]
-        B2 --> B3["발행자가 발행"]
-        B2 -.발행자 중단.-> B4["outbox PENDING 행이 남음<br/>backlog로 관측 가능<br/><b>재시작하면 복구</b>"]
+        B1["jobs + outbox INSERT<br/>한 트랜잭션"] --> B2["COMMIT ✔<br/>클라이언트: 202"]
+        B2 --> B4["DB: jobs + outbox(PENDING)"]
+        B4 --> B5["발행자가 죽어 있다<br/>backlog: outbox_pending=1<br/>oldest_pending_sec 증가"]
+        B5 -->|"발행자 재시작"| B6["PENDING 행 발견 → 발행"]
+        B6 --> B7["<b>자동 복구 · DONE</b><br/>재시작 외 조치 없음"]
     end
 ```
+
+실제 실행 결과 (`reports/E0-20260920-1.md`, `reports/E3-20260920-1.md`):
+
+```
+ id |  request_key  | status  | outbox
+----+---------------+---------+--------
+  1 | (E0 · 레거시)  | PENDING |          ← 모든 서비스 복구 후에도 그대로
+  2 | (E3 · 아웃박스) | DONE    | SENT     ← 밀려 있었지만 재시작만으로 완료
+```
+
+`run.py backlog` 한 줄에 두 실패가 같이 잡히는데 성격이 반대다.
+
+| 카운터 | 의미 | 결말 |
+|---|---|---|
+| `outbox_pending` | 발행자가 집어갈 것 — **대기** | 재시작하면 자동 복구 |
+| `jobs_without_outbox` | 아무도 집어가지 않을 것 — **유실** | 사람이 찾아내 수동 재실행 |
+
+둘 다 "접수됐는데 안 끝난 건"을 세지만, 하나는 줄에 서 있고 하나는 줄 밖으로 떨어졌다.
 
 ### 식별자 네 개
 
