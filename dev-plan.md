@@ -55,7 +55,7 @@ v2를 면접 정리 문서와 대조하고, kombu·celery 소스로 발행 경�
 | R2 | 1 | postgres `healthcheck: pg_isready -U app -d app` | v2가 `condition: service_healthy`를 요구하면서 healthcheck를 정의하지 않았다 |
 | R3 | 1 | `psycopg[binary]` 핀 | 소스 빌드·libpq-dev 회피 |
 | R4 | 1 | `pydantic-settings` 대신 `os.environ` + 검증 함수 | 의존성 하나 줄임. 장애 주입 플래그는 요청 시점에 읽는 객체 속성 |
-| R5 | 1 | 테스트 DB `app_test`를 postgres initdb 스크립트로 생성. pytest는 `DATABASE_URL`만 바꿔 실행 | 실험 DB 오염 방지. 코드 분기 없음 |
+| R5 | 1 | 테스트 DB `app_test`를 postgres initdb 스크립트로 생성. `conftest.py`가 앱 모듈 임포트 전에 `DATABASE_URL`의 DB 이름을 `app_test`로 치환 | 실험 DB 오염 방지. 앱 코드에 테스트 분기 없음. 긴 `-e` 플래그를 없애 PowerShell 붙여넣기 사고와 오입력 여지를 제거 |
 | R6 | 1 | `POST /jobs` 202 본문은 v2대로 `{job_id, status}`. 중복 200은 GET 본문 | 통일 제안이 있었으나 스펙을 바꿀 이유가 부족. `run.py`는 status code와 본문을 그대로 출력 |
 | R7 | 1 | `.gitattributes` `* text=auto eol=lf`, `PYTHONUNBUFFERED=1`, compose `command:`는 exec 배열 | Windows CRLF, 컨테이너 로그 버퍼링, PID 1이 파이썬이어야 SIGTERM 핸들러가 동작 |
 | R8 | 1 | git 저장소 초기화. 첫 커밋은 두 md 문서, 이후 `step N:` | §12 |
@@ -556,7 +556,7 @@ retro-msg-queue/
 
 `run.py`는 컨테이너 안(`docker compose exec api python experiments/run.py ...`)에서 실행한다. `API_BASE_URL` 기본값 `http://api:8000`. `republish`가 api 컨테이너에서 브로커에 붙는 것은 §5 "API는 브로커에 연결하지 않는다"의 실험용 예외다.
 
-pytest는 `docker compose exec -e DATABASE_URL=postgresql+psycopg://app:app@postgres:5432/app_test api pytest -q`로 실행한다. `conftest.py`가 URL이 `app_test`로 끝나지 않으면 즉시 실패시킨다.
+pytest는 `docker compose exec api pytest -q`로 실행한다. `conftest.py`가 앱 모듈 임포트 전에 `DATABASE_URL`의 DB 이름을 `app_test`로 치환하므로 별도 플래그가 필요 없고, 실험 DB(`app`)를 건드릴 경로도 없다.
 
 과도한 계층 분리(repository·service·DTO 분리)를 하지 않는다. 파일 하나에 역할 하나면 충분하다.
 

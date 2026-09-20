@@ -1,21 +1,33 @@
 """pytest는 app_test DB에서만 돈다 (R5).
 
-실행: docker compose exec -e DATABASE_URL=postgresql+psycopg://app:app@postgres:5432/app_test api pytest -q
+실행: docker compose exec api pytest -q
+
+`DATABASE_URL`이 무엇을 가리키든 아래에서 DB 이름을 app_test로 바꾼 뒤 app.* 를 임포트한다.
+엔진은 app/db.py 임포트 시점에 만들어지므로, 이 치환이 임포트보다 먼저다.
+실험 DB(app)를 건드릴 경로 자체를 없앤다.
 """
 
 import os
 
 import pytest
+from sqlalchemy.engine import make_url
 
-_url = os.environ.get("DATABASE_URL", "")
-if not _url.rstrip("/").endswith("/app_test"):
-    pytest.exit(f"refusing to run: DATABASE_URL must point to app_test (got {_url!r})", returncode=2)
+_raw = os.environ.get("DATABASE_URL", "")
+if not _raw:
+    pytest.exit("DATABASE_URL is required", returncode=2)
+
+os.environ["DATABASE_URL"] = (
+    make_url(_raw).set(database="app_test").render_as_string(hide_password=False)
+)
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app.db import engine  # noqa: E402
 from app.main import app  # noqa: E402
+
+if engine.url.database != "app_test":  # 치환이 엔진에 반영됐는지 확인
+    pytest.exit(f"refusing to run: engine points at {engine.url.database!r}", returncode=2)
 
 
 @pytest.fixture(scope="session")

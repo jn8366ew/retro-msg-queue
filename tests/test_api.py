@@ -1,4 +1,7 @@
-"""POST /jobs, GET /jobs/{id} 계약 (dev-plan §5). E2·E7의 단위 버전."""
+"""POST /jobs, GET /jobs/{id} 계약 (dev-plan §5). E2·E7의 단위 버전.
+
+실행: docker compose exec api pytest -q
+"""
 
 from app.config import settings
 
