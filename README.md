@@ -6,7 +6,7 @@
 - 진행 상태: [`roadmap.md`](roadmap.md)
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
 
-**현재 3단계 완료.** 정상 흐름 + 장애 주입(발행자 중단·브로커 장애) + E0 대조군까지. 중단·중복 실험은 4단계.
+**로컬 아웃박스 MVP 완료 (1~4단계).** 실험 9개 전부 실행하고 리포트를 남겼다. SQS(5단계)는 미실행.
 
 ---
 
@@ -349,6 +349,74 @@ Remove-Item Env:\LEGACY_INLINE_PUBLISH; Remove-Item Env:\API_CRASH_AFTER_COMMIT
 docker compose --profile redis up -d --force-recreate api
 ```
 
+### 발행 후 기록 전 중단 (E5)
+
+**먼저 미발행 잔여 행이 없는지 확인한다** — 플래그가 켜진 발행자는 처음 집은 이벤트에서 죽는다:
+
+```powershell
+docker compose exec api python experiments/run.py backlog
+```
+
+```powershell
+$env:PUBLISHER_CRASH_AFTER_SEND="1"
+docker compose --profile redis up -d --force-recreate publisher
+```
+
+```powershell
+docker compose exec api python experiments/run.py create `
+  --request-key e5-001 --value 7
+```
+
+발행자가 죽는다. 이때 GET을 보면 **`jobs.DONE` + `outbox.PENDING`** 이다 — 작업은 끝났는데 아웃박스는 안 보냈다고 기록하고 있다:
+
+```powershell
+docker compose exec api python experiments/run.py get --job-id 1
+```
+
+플래그를 끄고 되살리면 같은 이벤트를 다시 발행하고, 워커가 두 번째로 실행하지만 결과는 안 바뀐다:
+
+```powershell
+Remove-Item Env:\PUBLISHER_CRASH_AFTER_SEND
+docker compose --profile redis up -d --force-recreate publisher
+```
+
+### 조건부 UPDATE 실증 (E6b)
+
+concurrency=1에서는 사전 조회가 항상 먼저 걸려 `rejected_already_done`이 나오지 않는다. 동시 실행 창을 만든다:
+
+```powershell
+docker compose stop publisher
+```
+
+```powershell
+$env:CELERY_CONCURRENCY="2"; $env:TASK_DELAY_SEC="3"
+docker compose --profile redis up -d --force-recreate worker
+```
+
+```powershell
+docker compose exec api python experiments/run.py create `
+  --request-key e6b-001 --value 7
+```
+
+두 재발행을 병렬로 던진다:
+
+```powershell
+docker compose exec api sh -c 'python experiments/run.py republish --event-id 1 & python experiments/run.py republish --event-id 1 & wait'
+```
+
+워커 로그에 `adopted` 1건 + `rejected_already_done` 1건이 나온다:
+
+```powershell
+docker compose logs worker --tail 10
+```
+
+끝나면 기본값으로 되돌린다:
+
+```powershell
+Remove-Item Env:\CELERY_CONCURRENCY; Remove-Item Env:\TASK_DELAY_SEC
+docker compose --profile redis up -d --force-recreate worker publisher
+```
+
 ### 정리
 
 컨테이너만 내린다:
@@ -437,7 +505,17 @@ dev-plan §7 "2단계 검증 항목". `max_retries: 0`을 적용하기 **전에*
 
 **E4에 대한 함의** — 실패 1회에 3.9초 + `PUBLISH_RETRY_DELAY_SEC=3`이므로 `attempts=2`는 t≈5초다. 적용 전이라면 t≈11초로, dev-plan v2의 "3~10초 후 확인"은 관측에 실패했을 것이다.
 
-나머지 2단계 이후 결정(R10~R16)은 해당 단계에서 적용하고 여기에 추가한다.
+### R10~R13 (2~4단계 적용)
+
+| # | 결정 | 이유 |
+|---|---|---|
+| R10 | `worker`·`publisher`에 `depends_on: redis`를 넣지 않는다 | profile 없는 서비스가 profile `redis`의 서비스에 의존하면 프로필 미활성 시 `up`이 실패한다. 워커는 `broker_connection_retry_on_startup=True`로, 발행자는 자체 루프로 브로커 부재를 견딘다 — 그 견디는 동작 자체가 E4다 |
+| R11 | 워커 `@app.task(bind=True)`, `completed_at=func.now()` | dev-plan §6 의사코드는 `self.request.id`를 쓰면서 bind가 없어 실행되지 않았다. 시각은 DB 기준으로 통일 |
+| R12 | E0 대조군을 `LEGACY_INLINE_PUBLISH`·`API_CRASH_AFTER_COMMIT` 플래그 뒤에 구현 | dev-plan v2는 "구현하지 않음"이었으나, 그러면 아웃박스의 개선 효과가 서술로만 남는다. 플래그 뒤 ~30줄로 관측 가능해진다 |
+| R13 | E6b에서만 worker `--concurrency=2`, `TASK_DELAY_SEC=3` | concurrency=1에서는 사전 조회가 항상 먼저 걸려 조건부 UPDATE의 `rowcount=0` 분기가 **어떤 실험에서도 실행되지 않는다**. §1 제약의 의도적 이탈이며 실험 후 1로 되돌렸다 |
+| 추가 | `run.py backlog`에 `jobs_without_outbox` 카운터 | E0이 남기는 상태(아웃박스 행이 아예 없는 업무)를 센다. `outbox_pending`(대기)과 대비되는 유실 지표 |
+
+R14~R16(SQS)은 5단계 미실행이므로 코드에만 있고 실측 기록이 없다.
 
 ---
 
@@ -450,11 +528,13 @@ dev-plan §7 "2단계 검증 항목". `max_retries: 0`을 적용하기 **전에*
 | E2 | 트랜잭션 롤백 | **통과** | [E2-20260920-1](reports/E2-20260920-1.md) |
 | E3 | 발행자 중단 | **통과** | [E3-20260920-1](reports/E3-20260920-1.md) |
 | E4 | 브로커 접속 실패 | **통과** | [E4-20260920-1](reports/E4-20260920-1.md) |
-| E5 | 발행 후 기록 전 중단 | 4단계 | — |
-| E6 | 중복 전달 (직렬) | 4단계 | — |
-| E6b | 중복 전달 (동시, concurrency=2) | 4단계 | — |
+| E5 | 발행 후 기록 전 중단 | **통과** | [E5-20260920-1](reports/E5-20260920-1.md) |
+| E6 | 중복 전달 (직렬) | **통과** | [E6-20260920-1](reports/E6-20260920-1.md) |
+| E6b | 중복 전달 (동시, concurrency=2) | **통과** | [E6b-20260920-1](reports/E6b-20260920-1.md) |
 | E7 | HTTP 중복 접수 | **통과** | [E7-20260920-1](reports/E7-20260920-1.md) |
 | E8 | 워커 kill × acks_late | 후속 (범위 밖) | — |
+
+SQS(5단계)는 실제 연결·실험을 수행하지 않았다. **미실행**으로 남긴다 — Redis 결과로 대신하지 않는다.
 
 SQS(5단계)는 실제 연결·실험을 수행했을 때만 체크한다. Redis 결과로 대신하지 않는다.
 

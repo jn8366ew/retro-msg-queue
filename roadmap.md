@@ -50,13 +50,13 @@
 
 ## 4단계 — 중단·중복
 
-- [ ] **E5** (사전 backlog 0 확인) 실행 → 리포트 (DONE-before-SENT, 같은 event_id 재발행, `adopted` 1 + `already_done` 1)
-- [ ] **E6** 실행 → 리포트 (`already_done` 2건, execution_id 불변)
-- [ ] **E6b** concurrency=2, `TASK_DELAY_SEC=3` (R13) 실행 → 리포트 (`adopted` 1 + `rejected_already_done` 1)
-- [ ] 리포트 9개 모두 "한계" 고정 항목 포함
-- [ ] README 완성: 결정 기록 R1~R16 + 실측값, 실험 표·링크, §13 후속, §14 대응표
-- [ ] `dev-plan.md` §8 완료 체크리스트 전부 체크
-- [ ] `git commit -m "step 4: ..."` → **로컬 아웃박스 MVP 완료**
+- [x] **E5** (사전 backlog 0 확인) 실행 → 리포트 (DONE-before-SENT, 같은 event_id 재발행, `adopted` 1 + `already_done` 1)
+- [x] **E6** 실행 → 리포트 (`already_done` 2건, execution_id 불변)
+- [x] **E6b** concurrency=2, `TASK_DELAY_SEC=3` (R13) 실행 → 리포트 (`adopted` 1 + `rejected_already_done` 1)
+- [x] 리포트 9개 모두 "한계" 고정 항목 포함
+- [x] README 완성: 결정 기록 R1~R16 + 실측값, 실험 표·링크, §13 후속, §14 대응표
+- [x] `dev-plan.md` §8 완료 체크리스트 전부 체크
+- [x] `git commit -m "step 4: ..."` → **로컬 아웃박스 MVP 완료**
 
 ## 5단계 — SQS (선택, 사용자 준비 후)
 

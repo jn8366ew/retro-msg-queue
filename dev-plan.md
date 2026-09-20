@@ -2,7 +2,7 @@
 
 - 작성일: 2026-09-17
 - 갱신일: 2026-09-20 (v3 — 면접 정리 문서 대조·라이브러리 실동작 검증 반영. v2는 같은 날 구현 착수용 확정본)
-- 상태: 개발 착수 가능. 코드·실험 결과 없음. Claude Code 실행 대상 문서.
+- 상태: **1~4단계 구현·실험 완료 (2026-09-20).** 실험 9개(E0~E7, E6b) 실행하고 `reports/`에 기록. SQS(5단계) 미실행. 실측 결과는 README "결정 기록"과 각 리포트에 있으며, 이 문서의 예상과 다른 값은 해당 절에 표시했다.
 - 대조 문서: `insurance_message_queue_interview_notes_2026-09-16.md` — 과거 보험 프로젝트의 실제 구성·미확인 사항·학습한 개선안. 이 MVP가 그중 어느 공백을 겨냥하는지는 §14.
 - 진행 상태: `roadmap.md` (단계별 체크리스트). 이 문서는 설계·결정, 로드맵은 진행만 기록한다.
 - 실행 순서: **Redis 프로필로 로컬 실험 전부 완료 → 동일 코드로 SQS 프로필 연결**
@@ -59,7 +59,7 @@ v2를 면접 정리 문서와 대조하고, kombu·celery 소스로 발행 경�
 | R6 | 1 | `POST /jobs` 202 본문은 v2대로 `{job_id, status}`. 중복 200은 GET 본문 | 통일 제안이 있었으나 스펙을 바꿀 이유가 부족. `run.py`는 status code와 본문을 그대로 출력 |
 | R7 | 1 | `.gitattributes` `* text=auto eol=lf`, `PYTHONUNBUFFERED=1`, compose `command:`는 exec 배열 | Windows CRLF, 컨테이너 로그 버퍼링, PID 1이 파이썬이어야 SIGTERM 핸들러가 동작 |
 | R8 | 1 | git 저장소 초기화. 첫 커밋은 두 md 문서, 이후 `step N:` | §12 |
-| R9 | 2 | 브로커 다운 시 `apply_async`를 **먼저 실측**하고, 그 뒤 `send_compute`가 `app.connection_for_write(transport_options={"max_retries": 0})` 전용 연결로 `apply_async(connection=...)` | 소스 분석: `task_publish_retry=False`는 publish 래퍼만 끈다. 실제 루프는 `Connection.default_channel → _ensure_connection → retry_over_time(2s, 4s, …)`이고 `broker_connection_timeout`(=connect_timeout, 기본 4)이 총 예산 → ≈6초 후 `kombu.exceptions.OperationalError`. `broker_connection_retry*`·`broker_connection_max_retries`는 워커 전용. 미조치 시 E4 "3~10초 후 attempts≥2" 관측 실패. 전용 연결이라 워커 재접속 정책엔 손대지 않는다 |
+| R9 | 2 | 브로커 다운 시 `apply_async`를 **먼저 실측**하고, 그 뒤 `send_compute`가 `app.connection_for_write(transport_options={"max_retries": 0})` 전용 연결로 `apply_async(connection=...)` | 소스 분석: `task_publish_retry=False`는 publish 래퍼만 끈다. 실제 루프는 `Connection.default_channel → _ensure_connection → retry_over_time`이고 `broker_connection_timeout`(=connect_timeout, 기본 4)이 총 예산이다. `broker_connection_retry*`·`broker_connection_max_retries`는 워커 전용. **실측(2026-09-20): 예외 클래스는 예상대로 `kombu.exceptions.OperationalError`, 시간은 예상 ≈6초가 아니라 ≈10초.** `docker compose stop`이 DNS 항목을 지워 이름 해석 실패가 되고 그 자체가 ≈3.9초 걸리기 때문이다. `max_retries: 0` 적용 후 3.9초(예상했던 100ms 미만은 연결 거부 상황에서만 가능). 미조치 시 E4의 v2 관측 창("3~10초")은 실패했을 것이다. 전용 연결이라 워커 재접속 정책엔 손대지 않는다. 상세는 README 결정 기록 |
 | R10 | 2 | `worker`의 `depends_on: redis` 제거 | profile 없는 서비스가 profile `redis`의 서비스에 의존하면 프로필 미활성 시 `up` 실패. "프로필 redis에서만 의존"은 단일 서비스 정의로 표현 불가. `broker_connection_retry_on_startup=True`가 그 역할 |
 | R11 | 2 | 워커 `@app.task(bind=True, ...)`, `def compute(self, ...)`, `completed_at=func.now()` | v2 §6 의사코드는 `self.request.id`를 쓰면서 bind가 없고 `now()`의 시각 소스가 모호했다 |
 | R12 | 3 | E0: `LEGACY_INLINE_PUBLISH=1`이면 outbox 없이 `jobs INSERT → COMMIT → [API_CRASH_AFTER_COMMIT=1: os._exit(1)] → send_compute`. GET의 `outbox`는 `null` | 대조군. 중단 방식은 v2 #1과 같은 `os._exit` |
@@ -438,17 +438,17 @@ SQS_QUEUE_URL=
 
 ### MVP 완료 체크리스트
 
-- [ ] E0~E7(E6b 포함) Redis 프로필로 실행하고 리포트를 남겼다.
-- [ ] 아웃박스 없는 과거 방식에서 "탐지 근거 없음"을 관측하고 E3와 대비했다 (E0).
-- [ ] 업무와 발행 요청의 원자적 저장·롤백을 확인했다 (E2).
-- [ ] 브로커 없이도 DB 접수 기록을 남겼다 (E4).
-- [ ] 발행자·브로커 복구 후 미발행 요청을 전달했다 (E3, E4).
-- [ ] SENT가 업무 완료와 다른 상태임을 확인했다 (E5에서 SENT 전 DONE 관측).
-- [ ] 전송 후 기록 전 중단에서 중복 발행을 재현했다 (E5).
-- [ ] 중복 실행에도 채택된 DB 결과가 바뀌지 않았다 (E5, E6). 조건부 UPDATE의 rowcount=0 분기를 `rejected_already_done`으로 관측했다 (E6b).
-- [ ] §7 2단계 검증 항목을 실측하고 결정 기록에 남겼다 (R9).
-- [ ] pytest가 통과했다.
-- [ ] README에 실행 방법·패키지 버전·결정 기록을 남겼다.
+- [x] E0~E7(E6b 포함) Redis 프로필로 실행하고 리포트를 남겼다.
+- [x] 아웃박스 없는 과거 방식에서 "탐지 근거 없음"을 관측하고 E3와 대비했다 (E0).
+- [x] 업무와 발행 요청의 원자적 저장·롤백을 확인했다 (E2).
+- [x] 브로커 없이도 DB 접수 기록을 남겼다 (E4).
+- [x] 발행자·브로커 복구 후 미발행 요청을 전달했다 (E3, E4).
+- [x] SENT가 업무 완료와 다른 상태임을 확인했다 (E5에서 SENT 전 DONE 관측).
+- [x] 전송 후 기록 전 중단에서 중복 발행을 재현했다 (E5).
+- [x] 중복 실행에도 채택된 DB 결과가 바뀌지 않았다 (E5, E6). 조건부 UPDATE의 rowcount=0 분기를 `rejected_already_done`으로 관측했다 (E6b).
+- [x] §7 2단계 검증 항목을 실측하고 결정 기록에 남겼다 (R9).
+- [x] pytest가 통과했다.
+- [x] README에 실행 방법·패키지 버전·결정 기록을 남겼다.
 - [ ] SQS는 실제 연결·실험(E1, E3, E5)을 수행했을 때만 체크한다.
 
 ---
