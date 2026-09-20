@@ -16,16 +16,58 @@ services:
       timeout: 3s
       retries: 30
 
+  redis:
+    image: redis:7
+    profiles: ["redis"]
+
   api:
     build: .
     env_file: .env
     environment:
-      # 장애 주입 플래그는 셸 env로 덮어쓸 수 있다: $env:API_CRASH_BEFORE_OUTBOX="1"; docker compose up -d --force-recreate api
+      # 장애 주입 플래그는 셸 env로 덮어쓸 수 있다: $env:API_CRASH_BEFORE_OUTBOX="1"
       API_CRASH_BEFORE_OUTBOX: ${API_CRASH_BEFORE_OUTBOX:-0}
+      LEGACY_INLINE_PUBLISH: ${LEGACY_INLINE_PUBLISH:-0}
+      API_CRASH_AFTER_COMMIT: ${API_CRASH_AFTER_COMMIT:-0}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  publisher:
+    build: .
+    env_file: .env
+    environment:
+      PUBLISHER_CRASH_AFTER_SEND: ${PUBLISHER_CRASH_AFTER_SEND:-0}
+    # exec 형식. sh -c 로 감싸면 sh가 PID 1이 되어 SIGTERM을 파이썬에 전달하지 않는다 (R7)
+    command: ["python", "-m", "app.publisher"]
+    # os._exit(1) 후 무한 재기동을 막는다 (E5)
+    restart: "no"
+    # redis에 의존하지 않는다 (R10). 브로커 부재는 발행자 루프가 견딘다 — 그게 E4다
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    env_file: .env
+    # exec 형식. ${...}는 compose가 셸 env·.env로 치환하므로 sh -c가 필요 없다 (R7).
+    # E6b에서 $env:CELERY_CONCURRENCY="2"로 올린다 (R13).
+    command:
+      - "celery"
+      - "-A"
+      - "app.celery_app"
+      - "worker"
+      - "-Q"
+      - "${CELERY_QUEUE:-jobs}"
+      - "--concurrency=${CELERY_CONCURRENCY:-1}"
+      - "--pool=prefork"
+      - "-l"
+      - "info"
+    restart: "no"
+    # redis에 의존하지 않는다 (R10). broker_connection_retry_on_startup=True가 그 역할
     depends_on:
       postgres:
         condition: service_healthy

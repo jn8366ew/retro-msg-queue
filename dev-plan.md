@@ -374,7 +374,7 @@ def compute(self, job_id: int, event_id: int | None) -> dict:
 | broker_connection_retry_on_startup | True | 워커가 Redis보다 먼저 떠도 재접속. 워커 전용 설정 |
 | 발행 전용 연결 `transport_options` | `{"max_retries": 0}` | `send_compute`만. `app.connection_for_write(...)`로 생성. 2단계 실측 후 적용 (R9) |
 
-**2단계 검증 항목:** Redis 중지 상태에서 `send_compute`가 몇 초 안에 어떤 예외를 내는지 실측한다. 소스 분석 예상값 — `broker_connection_retry*`·`broker_connection_max_retries`는 워커 전용이라 무효이고 `task_publish_retry=False`도 연결 수립에는 무효다. `Connection.default_channel → _ensure_connection → retry_over_time`(interval 2, 2, …)이 `broker_connection_timeout=4`를 총 예산으로 써서 실패@0 → 2s 대기 → 실패@2 → 4s 대기 → 실패@6 → 6>4 raise, **≈6초 후 `kombu.exceptions.OperationalError`**. `docker compose stop redis`는 컨테이너 DNS 항목도 지우므로 오류 문자열은 "연결 거부"가 아니라 "이름 해석 실패"일 수 있다. 실측값(초, 예외 클래스, 메시지)을 README 결정 기록에 남긴 뒤 `send_compute`의 전용 연결에 `max_retries: 0`을 넣는다 (<100ms 실패). 예상과 다르면 예상이 아니라 실측을 기록한다.
+**2단계 검증 항목 — 실측 완료 (2026-09-20).** 예외 클래스는 예상대로 `kombu.exceptions.OperationalError`였고, **소요 시간은 예상(≈6초)과 달라 ≈10초**였다. `docker compose stop redis`가 컨테이너 DNS 항목을 지워 오류가 "연결 거부"가 아니라 이름 해석 실패가 되고, 그 자체가 ≈3.9초 걸린다 — 시도(3.9) → 대기 2초 → 시도(3.9) = 9.8초가 `broker_connection_timeout=4` 예산을 넘겨 raise. 컨테이너가 없는 경우와 멈춘 경우가 같다. `max_retries: 0` 적용 후 **10초 → 3.9초**이며, 남은 3.9초는 DNS 해석 시간이라 애플리케이션이 줄일 수 없다(예상했던 100ms 미만은 연결 거부 상황에서만 나온다). 전체 수치·메시지는 README 결정 기록과 `reports/E1-20260920-1.md`.
 
 ### 환경변수 (`.env.example`)
 

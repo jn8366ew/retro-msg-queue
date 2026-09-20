@@ -6,7 +6,7 @@
 - 진행 상태: [`roadmap.md`](roadmap.md)
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
 
-**현재 1단계 완료.** 접수·조회·롤백·중복 접수까지. 브로커·발행자·워커는 2단계.
+**현재 2단계 완료.** 접수·조회·롤백·중복 접수 + 브로커·발행자·워커 정상 흐름까지. 장애 주입·대조군은 3단계.
 
 ---
 
@@ -16,18 +16,43 @@
 
 ```powershell
 cd C:\Users\FAMILY\projs\retro-msg-queue
-Copy-Item .env.example .env      # 이미 있으면 생략
-docker compose up -d --build
 ```
+
+`.env`가 없으면 만든다:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+전체 스택(postgres · redis · api · publisher · worker)을 띄운다:
+
+```powershell
+docker compose --profile redis up -d --build
+```
+
+`--profile redis`를 빼면 redis가 뜨지 않는다. 브로커 없이 접수만 볼 때(1단계 범위)나 E4 상황을 만들 때 쓴다. **`BROKER_KIND`(`.env`)와 compose 프로필은 서로를 강제하지 않는다** — `BROKER_KIND=redis`인데 프로필을 빼면 발행자가 계속 실패한다 (R16).
 
 기동 확인:
 
 ```powershell
 docker compose ps
+```
+
+```powershell
 docker compose logs api --tail 20
 ```
 
-`db_ready` → `db_init_done tables=jobs,outbox_events` → `Application startup complete.` 가 보이면 정상이다.
+`db_ready` → `db_init_done tables=jobs,outbox_events` → `Application startup complete.` 가 보이면 정상이다. 발행자와 워커도 확인한다:
+
+```powershell
+docker compose logs publisher --tail 5
+```
+
+```powershell
+docker compose logs worker --tail 5
+```
+
+발행자는 `phase=publisher_start`, 워커는 `Connected to redis://redis:6379/0` 과 `celery@... ready.` 가 보이면 정상이다.
 
 ### 테스트
 
@@ -59,7 +84,13 @@ docker compose exec api python experiments/run.py count `
   --request-key my-key-001
 ```
 
-`wait`·`republish`·`backlog`는 2~3단계에서 추가한다.
+완료까지 폴링 (jobs.DONE + outbox.SENT):
+
+```powershell
+docker compose exec api python experiments/run.py wait --job-id 1 --timeout 30
+```
+
+`republish`·`backlog`는 3단계에서 추가한다.
 
 ### DB 직접 조회
 
@@ -156,8 +187,10 @@ docker compose exec api python experiments/run.py create `
 | httpx | 0.28.1 |
 | pytest | 9.1.1 |
 | Docker Engine | 29.1.2 |
-
-2단계에서 `celery[sqs]` 5.6.3, `redis` 8.1.0, kombu 5.6.2를 추가한다.
+| celery[sqs] | 5.6.3 |
+| kombu | 5.6.2 (celery 의존) |
+| redis (파이썬 클라이언트) | 8.1.0 |
+| Redis 서버 | 7 (`redis:7`) |
 
 ---
 
@@ -178,7 +211,29 @@ dev-plan.md에 없어서 스스로 정했거나, 검증 결과 문서를 고쳐�
 | 추가 | `app/logfmt.py`의 `kv()`로 로그 한 줄에 `phase job_id event_id execution_id task_id attempt`를 항상 포함 | dev-plan §12 로그 규칙. 없는 값은 `-`로 채워 grep·대조가 쉽다 |
 | 추가 | `.gitignore`에 `insurance_message_queue_interview_notes_2026-09-16.md` 포함 | 개인 면접 준비 자료다. 저장소에 올리지 않는다 |
 
-2단계 이후 결정(R9~R16)은 해당 단계에서 실측·적용하고 여기에 추가한다. 특히 **R9** — 브로커 다운 시 `apply_async`의 실제 소요 시간과 예외 클래스는 추측하지 않고 2단계에서 측정해 기록한다.
+### R9 — 브로커 다운 시 `apply_async` (2단계 실측)
+
+dev-plan §7 "2단계 검증 항목". `max_retries: 0`을 적용하기 **전에** 스펙 설정 그대로 측정했다.
+
+| 조건 | 소요 | 예외 |
+|---|---|---|
+| redis 정상 (기준선) | 0.074초 | — (성공) |
+| redis 없음, 스펙 설정 그대로 | 10.00 / 9.82초 | `kombu.exceptions.OperationalError` |
+| `stop redis`, 스펙 설정 그대로 | 9.98 / 9.82초 | `kombu.exceptions.OperationalError` |
+| `stop redis`, `max_retries: 0` | 4.03 / 3.85 / 3.85초 | `kombu.exceptions.OperationalError` |
+
+메시지는 네 경우 모두 `Error -2 connecting to redis:6379. Name or service not known.`
+
+- **예외 클래스는 예상대로**였다. redis 드라이버 예외가 아니라 kombu가 감싼 것이라 발행자의 `except`는 `kombu.exceptions.OperationalError`를 잡는다.
+- **소요 시간은 예상(≈6초)과 달랐다.** 예상은 연결 거부가 즉시 실패한다고 봤지만, `docker compose stop`은 컨테이너 DNS 항목을 지우므로 이름 해석 실패가 되고 그 자체가 ≈3.9초 걸린다. 시도(3.9) → 대기 2초 → 시도(3.9) = 9.8초가 `broker_connection_timeout=4` 예산을 넘겨 raise.
+- **컨테이너가 없는 경우와 멈춘 경우가 같다.** 둘 다 DNS 해석 실패다.
+- `max_retries: 0` 적용 후 **10초 → 3.9초.** 재시도가 사라졌고 남은 3.9초는 DNS 해석 시간이라 애플리케이션이 줄일 수 없다.
+
+적용 방식: `send_compute`가 `app.connection_for_write(transport_options={"max_retries": 0})`로 만든 **전용 연결**로 `apply_async(connection=...)` 한다. 워커의 재접속 정책(`broker_connection_retry_on_startup`)은 건드리지 않는다. `PUBLISH_CONNECT_MAX_RETRIES`를 빈 값으로 두면 이 덮어쓰기를 끄고 스펙 기본 동작으로 되돌려 실측을 재현할 수 있다.
+
+**E4에 대한 함의** — 실패 1회에 3.9초 + `PUBLISH_RETRY_DELAY_SEC=3`이므로 `attempts=2`는 t≈5초다. 적용 전이라면 t≈11초로, dev-plan v2의 "3~10초 후 확인"은 관측에 실패했을 것이다.
+
+나머지 2단계 이후 결정(R10~R16)은 해당 단계에서 적용하고 여기에 추가한다.
 
 ---
 
@@ -187,7 +242,7 @@ dev-plan.md에 없어서 스스로 정했거나, 검증 결과 문서를 고쳐�
 | # | 실험 | 상태 | 리포트 |
 |---|---|---|---|
 | E0 | 대조군 — 아웃박스 없는 과거 방식 | 3단계 | — |
-| E1 | 정상 흐름 | 2단계 | — |
+| E1 | 정상 흐름 | **통과** | [E1-20260920-1](reports/E1-20260920-1.md) |
 | E2 | 트랜잭션 롤백 | **통과** | [E2-20260920-1](reports/E2-20260920-1.md) |
 | E3 | 발행자 중단 | 3단계 | — |
 | E4 | 브로커 접속 실패 | 3단계 | — |

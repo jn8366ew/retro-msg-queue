@@ -26,17 +26,17 @@
 
 ## 2단계 — 브로커·워커·발행자 (정상 흐름)
 
-- [ ] `requirements.txt`에 `celery[sqs]`, `redis` 추가
-- [ ] `app/celery_app.py`: §7 설정, `BROKER_KIND` 분기
-- [ ] `app/tasks.py`: `compute`(`bind=True`, `func.now()`, R11), `send_compute`
-- [ ] `app/publisher.py`: §6 루프, SIGTERM/SIGINT 핸들러, `kombu.exceptions.OperationalError` 처리
-- [ ] compose: redis(profile `redis`), publisher, worker — `depends_on: postgres`만 (R10)
-- [ ] `run.py wait`
-- [ ] `tests/test_adopt.py`: 조건부 UPDATE 채택 1 / 거절 0
-- [ ] **§7 2단계 검증 실측**: redis 중지 상태에서 `send_compute` 소요 초·예외 클래스·메시지 기록 (예상 ≈6초 `OperationalError`)
-- [ ] `send_compute` 전용 연결에 `max_retries: 0` 적용 → 재실측(<100ms) → 결정 기록 (R9)
-- [ ] **E1** 실행 → 리포트
-- [ ] `git commit -m "step 2: ..."`
+- [x] `requirements.txt`에 `celery[sqs]`, `redis` 추가
+- [x] `app/celery_app.py`: §7 설정, `BROKER_KIND` 분기
+- [x] `app/tasks.py`: `compute`(`bind=True`, `func.now()`, R11), `send_compute`
+- [x] `app/publisher.py`: §6 루프, SIGTERM/SIGINT 핸들러, `kombu.exceptions.OperationalError` 처리
+- [x] compose: redis(profile `redis`), publisher, worker — `depends_on: postgres`만 (R10)
+- [x] `run.py wait`
+- [x] `tests/test_adopt.py`: 조건부 UPDATE 채택 1 / 거절 0
+- [x] **§7 2단계 검증 실측**: redis 중지 상태에서 `send_compute` 소요 초·예외 클래스·메시지 기록 (예상 ≈6초 `OperationalError`)
+- [x] `send_compute` 전용 연결에 `max_retries: 0` 적용 → 재실측(<100ms) → 결정 기록 (R9)
+- [x] **E1** 실행 → 리포트
+- [x] `git commit -m "step 2: ..."`
 
 ## 3단계 — 장애 주입·대조군·관측
 

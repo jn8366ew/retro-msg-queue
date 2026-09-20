@@ -1,13 +1,14 @@
 """실험 CLI. 컨테이너 안에서 실행: docker compose exec api python experiments/run.py <cmd> ...
 
-1단계: create | get | count
-2~3단계에서 wait | republish | backlog 추가 (dev-plan §11).
+1~2단계: create | get | count | wait
+3단계에서 republish | backlog 추가 (dev-plan §11).
 """
 
 import argparse
 import json
 import os
 import sys
+import time
 
 import httpx
 
@@ -43,6 +44,34 @@ def cmd_get(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_wait(a: argparse.Namespace) -> int:
+    """jobs.DONE·outbox.SENT까지 폴링하고 상태가 바뀐 시각을 출력한다.
+
+    둘은 별개 상태다. 하나만 도달해도 타임아웃까지 나머지를 기다린다.
+    """
+    start = time.monotonic()
+    seen: dict[str, str] = {}
+    job_status = outbox_status = None
+    while time.monotonic() - start < a.timeout:
+        r = httpx.get(f"{API_BASE_URL}/jobs/{a.job_id}", timeout=10)
+        if r.status_code != 200:
+            _print_response(r)
+            return 1
+        d = r.json()
+        job_status = d["status"]
+        outbox_status = d["outbox"]["status"] if d["outbox"] else "NONE"
+        for label, value in (("jobs", job_status), ("outbox", outbox_status)):
+            if seen.get(label) != value:
+                seen[label] = value
+                print(f"[{time.monotonic() - start:6.2f}s] {label}={value}")
+        if job_status == "DONE" and outbox_status in ("SENT", "NONE"):
+            print(json.dumps(d, ensure_ascii=False, indent=2))
+            return 0
+        time.sleep(0.2)
+    print(f"TIMEOUT after {a.timeout}s: jobs={job_status} outbox={outbox_status}")
+    return 1
+
+
 def cmd_count(a: argparse.Namespace) -> int:
     """jobs·outbox_events 행 수 (E2·E7 확인용). DB 직접 조회."""
     from sqlalchemy import text
@@ -74,6 +103,11 @@ def main(argv: list[str]) -> int:
     g = sub.add_parser("get", help="GET /jobs/{job_id}")
     g.add_argument("--job-id", type=int, required=True)
     g.set_defaults(fn=cmd_get)
+
+    w = sub.add_parser("wait", help="DONE·SENT까지 폴링")
+    w.add_argument("--job-id", type=int, required=True)
+    w.add_argument("--timeout", type=float, default=30)
+    w.set_defaults(fn=cmd_wait)
 
     n = sub.add_parser("count", help="request_key 기준 jobs·outbox_events 행 수")
     n.add_argument("--request-key", required=True)

@@ -31,6 +31,8 @@ class Settings:
     publish_batch_size: int
     publish_retry_delay_sec: float
     task_delay_sec: float
+    # 발행 전용 연결의 kombu 연결 수립 재시도 횟수 (R9). 빈 값이면 덮어쓰지 않는다(스펙 기본 동작).
+    publish_connect_max_retries: int | None
     sqs_region: str
     sqs_queue_url: str
 
@@ -52,6 +54,9 @@ def load_settings() -> Settings:
         publish_batch_size=int(_env("PUBLISH_BATCH_SIZE", "10")),
         publish_retry_delay_sec=float(_env("PUBLISH_RETRY_DELAY_SEC", "3")),
         task_delay_sec=float(_env("TASK_DELAY_SEC", "1")),
+        publish_connect_max_retries=(
+            int(_raw) if (_raw := _env("PUBLISH_CONNECT_MAX_RETRIES", "0")) != "" else None
+        ),
         sqs_region=_env("SQS_REGION"),
         sqs_queue_url=_env("SQS_QUEUE_URL"),
     )
