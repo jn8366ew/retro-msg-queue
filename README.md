@@ -39,10 +39,24 @@ docker compose exec api pytest -q
 
 ### 실험 CLI
 
+접수:
+
 ```powershell
-docker compose exec api python experiments/run.py create --request-key my-key-001 --value 7
+docker compose exec api python experiments/run.py create `
+  --request-key my-key-001 --value 7
+```
+
+조회:
+
+```powershell
 docker compose exec api python experiments/run.py get --job-id 1
-docker compose exec api python experiments/run.py count --request-key my-key-001
+```
+
+행 수 (E2·E7 확인용):
+
+```powershell
+docker compose exec api python experiments/run.py count `
+  --request-key my-key-001
 ```
 
 `wait`·`republish`·`backlog`는 2~3단계에서 추가한다.
@@ -50,32 +64,80 @@ docker compose exec api python experiments/run.py count --request-key my-key-001
 ### DB 직접 조회
 
 ```powershell
-docker compose exec postgres psql -U app -d app -c "SELECT id, request_key, status, input FROM jobs ORDER BY id;"
-docker compose exec postgres psql -U app -d app -c "SELECT id, job_id, status, attempts, last_error FROM outbox_events ORDER BY id;"
+docker compose exec postgres psql -U app -d app `
+  -c "SELECT id, request_key, status, input FROM jobs ORDER BY id;"
+```
+
+```powershell
+docker compose exec postgres psql -U app -d app `
+  -c "SELECT id, job_id, status, attempts, last_error FROM outbox_events ORDER BY id;"
 ```
 
 ### 장애 주입 (E2)
 
+플래그를 켜고 api 재기동:
+
 ```powershell
 $env:API_CRASH_BEFORE_OUTBOX="1"
 docker compose up -d --force-recreate api
-docker compose exec api printenv API_CRASH_BEFORE_OUTBOX      # 1 확인
+docker compose exec api printenv API_CRASH_BEFORE_OUTBOX
+```
 
-docker compose exec api python experiments/run.py create --request-key crash-001 --value 42   # → HTTP 500
-docker compose exec api python experiments/run.py count --request-key crash-001               # → 0 / 0
+`1`이 나와야 한다. 접수하면 500이 난다:
 
+```powershell
+docker compose exec api python experiments/run.py create `
+  --request-key crash-001 --value 42
+```
+
+두 테이블 모두 0이어야 한다:
+
+```powershell
+docker compose exec api python experiments/run.py count `
+  --request-key crash-001
+```
+
+플래그를 끄고 재기동:
+
+```powershell
 Remove-Item Env:\API_CRASH_BEFORE_OUTBOX
 docker compose up -d --force-recreate api
+docker compose exec api printenv API_CRASH_BEFORE_OUTBOX
+```
+
+`0`이 나와야 한다. **같은 request_key로 다시 접수해 202를 확인한다** — 롤백된 행이 `request_key`를 점유하고 있지 않았다는 증거다:
+
+```powershell
+docker compose exec api python experiments/run.py create `
+  --request-key crash-001 --value 42
 ```
 
 플래그는 셸 환경변수로만 켠다. HTTP로 켜고 끄는 경로는 만들지 않는다 (dev-plan §12).
 
 ### 정리
 
+컨테이너만 내린다:
+
 ```powershell
-docker compose down            # 컨테이너만
-docker compose down -v         # 볼륨(DB 데이터)까지 — app_test는 볼륨 최초 생성 시에만 만들어지므로 이후 재생성된다
+docker compose down
 ```
+
+볼륨(DB 데이터)까지 지운다. `app_test`는 볼륨 최초 생성 시 initdb로 만들어지므로 다음 `up`에서 함께 재생성된다:
+
+```powershell
+docker compose down -v
+```
+
+### PowerShell에서 명령이 길 때
+
+줄을 나누려면 **줄 끝에 백틱(`` ` ``)** 을 붙인다. 백틱 뒤에 공백이 하나라도 있으면 연결되지 않고 `단항 연산자 '--' 뒤에 식이 없습니다` 같은 파싱 오류가 난다.
+
+```powershell
+docker compose exec api python experiments/run.py create `
+  --request-key my-key-001 --value 7
+```
+
+백틱 없이 그냥 개행하면 각 줄이 별개 명령으로 실행된다. 이 README의 코드 블록은 그대로 복사해도 되도록 백틱을 붙여 뒀다.
 
 ---
 
