@@ -10,6 +10,111 @@
 
 ---
 
+## 구조
+
+### 정상 흐름 (E1 실측 타임스탬프)
+
+아래 시각은 `reports/E1-20260920-1.md`의 실제 로그에서 가져온 것이다. 접수부터 완료까지 1.9초.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 클라이언트
+    participant A as api
+    participant DB as PostgreSQL
+    participant P as publisher
+    participant R as Redis
+    participant W as worker
+
+    C->>A: POST /jobs
+    rect rgb(224, 242, 254)
+        note over A,DB: 한 트랜잭션 · 35.902
+        A->>DB: INSERT jobs (PENDING)
+        A->>DB: INSERT outbox_events (PENDING)
+        A->>DB: COMMIT
+    end
+    A-->>C: 202 job_id=1
+    note over A,R: api는 브로커에 연결하지 않는다
+
+    loop 1초마다
+        P->>DB: SELECT WHERE status='PENDING'
+    end
+    P->>DB: attempts=1, next_attempt_at=now+3s · 36.724
+    P->>R: apply_async · 36.778
+    R->>W: 메시지 전달 · 36.777
+    P->>DB: outbox SENT · 36.782
+    note over P,DB: 이 4ms 안에 죽으면 중복 전달 (E5)
+
+    W->>DB: SELECT job
+    note over W: 계산 + TASK_DELAY_SEC
+    W->>DB: UPDATE jobs SET DONE WHERE status='PENDING' · 37.804
+    note over W,DB: rowcount 1 = 채택 / 0 = 이미 완료 (E6b)
+```
+
+### 실패 지점과 실험의 대응
+
+각 분기점이 실험 하나에 대응한다.
+
+```mermaid
+flowchart TD
+    A["POST /jobs"] --> B{"한 트랜잭션<br/>jobs + outbox_events"}
+    B -->|예외| B1["전체 롤백 · 500<br/>어느 테이블에도 행 없음"]
+    B -->|COMMIT| C["202 반환<br/>outbox = PENDING"]
+    C --> D{"발행자 살아있나"}
+    D -->|중단| D1["PENDING 행이 남는다<br/>재시작하면 이어서 발행"]
+    D1 --> D
+    D -->|동작| E{"브로커 붙나"}
+    E -->|실패| E1["attempts+1, last_error 기록<br/>다음 주기에 재시도"]
+    E1 --> E
+    E -->|전송 성공| F{"SENT 기록 전에 죽나"}
+    F -->|중단| F1["같은 이벤트가 다시 발행됨<br/>워커가 두 번 실행"]
+    F1 --> G
+    F -->|기록됨| G["워커 실행"]
+    G --> H{"조건부 UPDATE<br/>WHERE status='PENDING'"}
+    H -->|rowcount 1| I["채택 · DONE + result"]
+    H -->|rowcount 0| J["거절 · 기존 결과 유지"]
+
+    B1 -.- T2["E2"]
+    D1 -.- T3["E3"]
+    E1 -.- T4["E4"]
+    F1 -.- T5["E5"]
+    I -.- T1["E1"]
+    J -.- T6["E6b"]
+```
+
+### E0 대조군 — 아웃박스가 산 것
+
+과거 보험 프로젝트는 왼쪽이었다. "가입은 저장됐는데 증권 작업은 흔적도 없이 사라지고, 오류 알림조차 없어 탐지할 근거가 없었다"(면접 정리 8.7절). 3단계에서 둘을 같은 조건으로 돌려 비교한다.
+
+```mermaid
+flowchart LR
+    subgraph LEGACY["E0 · 아웃박스 없음 (과거 방식)"]
+        direction TB
+        A1["jobs INSERT"] --> A2["COMMIT"]
+        A2 --> A3["api가 직접 apply_async"]
+        A2 -.커밋 후 중단.-> A4["jobs 행만 존재<br/>발행 의도 기록 없음<br/>오류 로그 없음<br/><b>탐지 근거 없음</b>"]
+    end
+    subgraph OUTBOX["E3 · 아웃박스"]
+        direction TB
+        B1["jobs + outbox INSERT"] --> B2["COMMIT"]
+        B2 --> B3["발행자가 발행"]
+        B2 -.발행자 중단.-> B4["outbox PENDING 행이 남음<br/>backlog로 관측 가능<br/><b>재시작하면 복구</b>"]
+    end
+```
+
+### 식별자 네 개
+
+| 식별자 | 만드는 주체 | 식별 대상 | 재전달 시 |
+|---|---|---|---|
+| `job_id` | api (DB 시퀀스) | 업무 | 그대로 |
+| `event_id` | api (DB 시퀀스) | 발행 요청 | 그대로 |
+| `task_id` | Celery | 메시지 한 통 | 새로 생성 |
+| `execution_id` | worker | 실행 한 번 | 새로 생성 |
+
+`result.execution_id`가 바뀌지 않는다는 것이 "첫 실행 결과가 지켜졌다"의 증거다. 면접 정리 9.4~9.5절의 "S3 실행별 경로 + DB 채택 포인터"를 파일 없이 DB만으로 축소한 형태다.
+
+---
+
 ## 실행 방법 (PowerShell)
 
 ### 준비
