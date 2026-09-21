@@ -5,6 +5,7 @@
 - 설계·결정: [`dev-plan.md`](dev-plan.md) (v3)
 - 진행 상태: [`roadmap.md`](roadmap.md)
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
+- 실습 회고: `retrospective.md` — 과거 프로젝트의 미확인 지점과 실험의 대응 (개인 자료, git 미추적)
 
 **로컬 아웃박스 MVP 완료 (1~4단계).** 실험 9개 전부 실행하고 리포트를 남겼다. **SQS(5단계)는 E1·E3·E5를 실제 큐로 재실행해 통과했다** — 나머지 실험은 Redis 결과만 있다.
 

@@ -1,6 +1,7 @@
 # --- 이 프로젝트 ---
 .env
 insurance_message_queue_interview_notes_2026-09-16.md
+retrospective.md
 
 # --- Python ---
 __pycache__/
