@@ -4,6 +4,7 @@
 
 - 설계·결정: [`dev-plan.md`](dev-plan.md) (v3)
 - 진행 상태: [`roadmap.md`](roadmap.md)
+- 7단계 실습서: [`practice/step7.md`](practice/step7.md) — `SENT + PENDING` 탐지·복구(E10·E11)를 직접 돌려 보는 절차
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
 - 실습 회고: `retrospective.md` — 과거 프로젝트의 미확인 지점과 실험의 대응 (개인 자료, git 미추적)
 

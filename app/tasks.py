@@ -15,7 +15,7 @@ from .celery_app import app
 from .config import settings
 from .db import session_scope
 from .logfmt import kv
-from .models import Job
+from .models import Job, JobExecution
 
 log = logging.getLogger("app.tasks")
 
@@ -40,13 +40,18 @@ def compute(self, job_id: int, event_id: int | None) -> dict:
     ctx = {"job_id": job_id, "event_id": event_id, "execution_id": execution_id, "task_id": task_id}
     log.info(kv("start", **ctx))
 
+    # 이 블록이 커밋돼야 계산을 시작한다 — 이후 어디서 죽든 시작 기록은 남는다 (R20)
     with session_scope() as s:
         job = s.get(Job, job_id)
         if job is None:
             # 없는 업무를 성공 처리하지 않는다. result backend가 없으므로 이 실패는 워커 stderr에만 남는다.
             log.error(kv("job_not_found", **ctx))
             raise ValueError(f"job {job_id} not found")
+        execution = JobExecution(execution_id=execution_id, job_id=job_id, task_id=task_id)
+        s.add(execution)
         if job.status == "DONE":  # 계산 생략 최적화 — 보장이 아니다
+            execution.finished_at = func.now()
+            execution.outcome = "already_done"
             log.info(kv("already_done", **ctx))
             return {"adopted": False, "result": job.result}
         value = job.input["value"]
@@ -61,12 +66,22 @@ def compute(self, job_id: int, event_id: int | None) -> dict:
 
     with session_scope() as s:
         rowcount = adopt_result(s, job_id, result)
+        # 끝 기록은 채택과 같은 트랜잭션 — 채택됐는데 "끝나지 않은 실행"으로 남는 일이 없다
+        _finish(s, execution_id, "adopted" if rowcount == 1 else "rejected")
         if rowcount == 1:
             log.info(kv("adopted", **ctx))
             return {"adopted": True, "result": result}
         job = s.get(Job, job_id)
         log.info(kv("rejected_already_done", **ctx))
         return {"adopted": False, "result": job.result}
+
+
+def _finish(session, execution_id: str, outcome: str) -> None:
+    session.execute(
+        update(JobExecution)
+        .where(JobExecution.execution_id == execution_id)
+        .values(finished_at=func.now(), outcome=outcome)
+    )
 
 
 def send_compute(job_id: int, event_id: int | None) -> str:

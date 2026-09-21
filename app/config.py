@@ -37,6 +37,9 @@ class Settings:
     task_acks_late: bool
     task_reject_on_worker_lost: bool
     task_crash_before_adopt: bool
+    # 7단계 — SENT+PENDING 분류·복구 (R21·R22)
+    stale_after_sec: float
+    reconcile_max_unfinished: int
     sqs_region: str
     sqs_queue_url: str
 
@@ -64,6 +67,8 @@ def load_settings() -> Settings:
         task_acks_late=_flag("TASK_ACKS_LATE"),
         task_reject_on_worker_lost=_flag("TASK_REJECT_ON_WORKER_LOST"),
         task_crash_before_adopt=_flag("TASK_CRASH_BEFORE_ADOPT"),
+        stale_after_sec=float(_env("STALE_AFTER_SEC", "60")),
+        reconcile_max_unfinished=int(_env("RECONCILE_MAX_UNFINISHED", "3")),
         sqs_region=_env("SQS_REGION"),
         sqs_queue_url=_env("SQS_QUEUE_URL"),
     )

@@ -80,15 +80,15 @@
 
 ## 7단계 — `SENT + PENDING` 탐지·복구 (R20~R22)
 
-설계 확정 (2026-09-21), **개발 전.** 결정: 새 테이블 `job_executions`, 4분류(not_started·running·stalled·gave_up), T=60초, 수동 `run.py reconcile`, 미완료 실행 3건에서 포기.
+구현·테스트·실습 가이드 완료 (2026-09-21). **재개 지점: 사용자 실습** — [practice/step7.md](practice/step7.md). 결정: 새 테이블 `job_executions`, 4분류(not_started·running·stalled·gave_up), T=60초, 수동 `run.py reconcile`, 미완료 실행 3건에서 포기.
 
-- [ ] `app/models.py`: `JobExecution` (dev-plan §4) — `create_all`이 생성
-- [ ] `app/tasks.py`: 시작 기록(계산 전 별도 커밋), 종료 기록(채택과 같은 트랜잭션, 세 반환 경로 모두)
-- [ ] `app/config.py`: `STALE_AFTER_SEC`(기본 60), `RECONCILE_MAX_UNFINISHED`(기본 3)
-- [ ] `experiments/run.py`: `backlog`에 4분류 카운터 추가(기존 `sent_but_job_pending` 유지), `reconcile` 명령 신설
-- [ ] `tests/`: 4분류 판정과 reconcile의 재발행·거부를 AWS 없이 고정
-- [ ] 동작 확인(Claude): 이미지 재빌드, pytest, 네 분류가 한 번씩 찍히는지 짧게 확인 — 실험 본편은 하지 않는다
-- [ ] **`practice/step7.md` 실습 가이드** (U8): 단계별 PowerShell 명령, 각 단계에서 보여야 할 출력, 스스로 확인할 질문, 원복 절차
+- [x] `app/models.py`: `JobExecution` (dev-plan §4) — `create_all`이 생성
+- [x] `app/tasks.py`: 시작 기록(계산 전 별도 커밋), 종료 기록(채택과 같은 트랜잭션, 세 반환 경로 모두)
+- [x] `app/config.py`: `STALE_AFTER_SEC`(기본 60), `RECONCILE_MAX_UNFINISHED`(기본 3)
+- [x] `experiments/run.py`: `backlog`에 4분류 카운터 추가(기존 `sent_but_job_pending` 유지), `reconcile` 명령 신설
+- [x] `tests/`: 4분류 판정과 reconcile의 재발행·거부를 AWS 없이 고정 (`test_reconcile.py` 7건, 전체 25건 통과)
+- [x] 동작 확인(Claude): 실제 워커로 사망 → `stalled` → `reconcile` → 재발행 → `DONE`(실행 기록 2행) 배선만 확인, `--stale-after 5`. 실험 본편은 하지 않았다
+- [x] **`practice/step7.md` 실습 가이드** (U8): 단계별 PowerShell 명령, 각 단계에서 보여야 할 출력, 스스로 확인할 질문, 원복 절차
 - [ ] **E10·E11 실습 (사용자)** → 출력 전달
 - [ ] E10·E11 리포트 (사용자 출력으로 작성)
 - [ ] README: 실험 표·결정 기록·비보장 절 갱신

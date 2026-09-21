@@ -1,8 +1,8 @@
-"""Job, OutboxEvent — dev-plan §4."""
+"""Job, OutboxEvent, JobExecution — dev-plan §4."""
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, Integer, Text, func
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, Integer, Text, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,3 +45,28 @@ class OutboxEvent(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
     published_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class JobExecution(Base):
+    """태스크 실행 한 번 (R20). 끝을 기록하지 못한 행이 "시작했지만 끝나지 않은 실행"이다.
+
+    시작 행은 계산 전에 따로 커밋한다. 채택과 묶으면 죽었을 때 흔적도 함께 사라진다.
+    """
+
+    __tablename__ = "job_executions"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IS NULL OR outcome IN ('adopted','rejected','already_done')",
+            name="ck_job_executions_outcome",
+        ),
+    )
+
+    execution_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    job_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("jobs.id"), index=True, nullable=False)
+    # 브로커 재전달이면 이전 실행과 같은 값이다 (E8·E9)
+    task_id: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(Text, nullable=True)

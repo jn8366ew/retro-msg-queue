@@ -119,11 +119,13 @@ def cmd_backlog(a: argparse.Namespace) -> int:
     면접 정리 Q4 꼬리질문("발행자가 죽으면? → 적체 감지 필요")과 Q18("미전송 건수·최장
     대기 시간·미완료 작업 관측")에 대응한다. 과거 프로젝트에 없던 탐지 근거가 이것이다.
 
-    sent_but_pending은 워커 미도달과 실행 중 중단을 구분하지 못한다 (dev-plan §13-3).
+    sent_but_pending은 한 덩어리로 센다. 7단계부터 job_executions로 네 갈래로 나눠 함께 보인다
+    (dev-plan R21). 나누는 기준은 --stale-after·--max-unfinished, 기본은 설정값.
     """
     from sqlalchemy import text
 
     from app.db import engine
+    from app.reconcile import STATES, classify
 
     with engine.connect() as conn:
         pending = conn.scalar(text("SELECT count(*) FROM outbox_events WHERE status='PENDING'"))
@@ -150,19 +152,66 @@ def cmd_backlog(a: argparse.Namespace) -> int:
                 "WHERE o.id IS NULL"
             )
         )
+        rows = classify(conn, a.stale_after, a.max_unfinished)
+    by_state = {k: sum(1 for r in rows if r["state"] == k) for k in STATES}
     print(
         json.dumps(
             {
                 "outbox_pending": pending,
                 "oldest_pending_sec": round(float(oldest), 1),
                 "sent_but_job_pending": sent_but_pending,
+                "by_state": by_state,
                 f"attempts_ge_{a.min_attempts}": stuck,
                 "jobs_without_outbox": no_outbox,
             },
             ensure_ascii=False,
         )
     )
+    if a.detail:
+        for r in rows:
+            age = r["last_start_age_sec"]
+            print(
+                f"  job_id={r['job_id']} state={r['state']} executions={r['executions']} "
+                f"unfinished={r['unfinished']} last_start_age="
+                + ("-" if age is None else f"{float(age):.1f}s")
+            )
     return 0
+
+
+def cmd_reconcile(a: argparse.Namespace) -> int:
+    """stalled 업무를 다시 발행 대기로 되돌린다 (dev-plan R22). gave_up은 건드리지 않는다.
+
+    되돌리기만 한다. 실제 재발행은 발행자 루프가 다음 주기에 한다.
+    """
+    from app.db import engine
+    from app.reconcile import classify, reconcile
+
+    with engine.begin() as conn:
+        gave_up = [
+            r["job_id"]
+            for r in classify(conn, a.stale_after, a.max_unfinished)
+            if r["state"] == "gave_up"
+        ]
+        reconciled = reconcile(conn, a.stale_after, a.max_unfinished)
+    print(
+        json.dumps(
+            {
+                "reconciled": reconciled,
+                "gave_up_skipped": gave_up,
+                "stale_after_sec": a.stale_after,
+                "max_unfinished": a.max_unfinished,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _add_reconcile_args(parser: argparse.ArgumentParser) -> None:
+    from app.config import settings
+
+    parser.add_argument("--stale-after", type=float, default=settings.stale_after_sec)
+    parser.add_argument("--max-unfinished", type=int, default=settings.reconcile_max_unfinished)
 
 
 def main(argv: list[str]) -> int:
@@ -193,7 +242,13 @@ def main(argv: list[str]) -> int:
 
     bl = sub.add_parser("backlog", help="적체 관측 (읽기 전용)")
     bl.add_argument("--min-attempts", type=int, default=3)
+    bl.add_argument("--detail", action="store_true", help="SENT+PENDING 업무별 분류 근거")
+    _add_reconcile_args(bl)
     bl.set_defaults(fn=cmd_backlog)
+
+    rc = sub.add_parser("reconcile", help="stalled 업무를 발행 대기로 되돌림 (gave_up 제외)")
+    _add_reconcile_args(rc)
+    rc.set_defaults(fn=cmd_reconcile)
 
     a = p.parse_args(argv)
     return a.fn(a)
