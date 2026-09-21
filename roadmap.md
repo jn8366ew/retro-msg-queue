@@ -60,11 +60,11 @@
 
 ## 5단계 — SQS (선택, 사용자 준비 후)
 
-- [ ] 사용자 준비: Standard 큐(이름 = `CELERY_QUEUE`), 리전, 큐 URL, IAM 권한 (§9)
-- [ ] `BROKER_KIND=sqs` 시작 검증: 빈 값·큐 URL 불일치 시 기동 실패 (R14)
-- [ ] E1·E3·E5를 SQS로 재실행 → 리포트
-- [ ] README SQS 절: 권한, 연결 오류 확인법, visibility timeout·ACK 기록
-- [ ] `git commit -m "step 5: ..."`
+- [x] 사용자 준비: Standard 큐(이름 = `CELERY_QUEUE`), 리전, 큐 URL, IAM 권한 (§9)
+- [x] `BROKER_KIND=sqs` 시작 검증: 빈 값·큐 URL 불일치 시 기동 실패 (R14)
+- [x] E1·E3·E5를 SQS로 재실행 → 리포트
+- [x] README SQS 절: 권한, 연결 오류 확인법, visibility timeout·ACK 기록
+- [x] `git commit -m "step 5: ..."` → **SQS 전환 완료 (E1·E3·E5)**
 
 ## 후속 (이번 범위 밖, §13)
 

@@ -6,7 +6,7 @@
 - 진행 상태: [`roadmap.md`](roadmap.md)
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
 
-**로컬 아웃박스 MVP 완료 (1~4단계).** 실험 9개 전부 실행하고 리포트를 남겼다. SQS(5단계)는 미실행.
+**로컬 아웃박스 MVP 완료 (1~4단계).** 실험 9개 전부 실행하고 리포트를 남겼다. **SQS(5단계)는 E1·E3·E5를 실제 큐로 재실행해 통과했다** — 나머지 실험은 Redis 결과만 있다.
 
 ---
 
@@ -162,6 +162,12 @@ docker compose --profile redis up -d --build
 ```
 
 `--profile redis`를 빼면 redis가 뜨지 않는다. 브로커 없이 접수만 볼 때(1단계 범위)나 E4 상황을 만들 때 쓴다. **`BROKER_KIND`(`.env`)와 compose 프로필은 서로를 강제하지 않는다** — `BROKER_KIND=redis`인데 프로필을 빼면 발행자가 계속 실패한다 (R16).
+
+호스트 8000번을 다른 프로젝트가 쓰고 있으면 `API_PORT`로 옮긴다. 실험은 compose 네트워크(`http://api:8000`)로 돌기 때문에 이 매핑에 의존하지 않는다.
+
+```powershell
+$env:API_PORT="8001"
+```
 
 기동 확인:
 
@@ -444,6 +450,145 @@ docker compose exec api python experiments/run.py create `
 
 ---
 
+## SQS로 실행하기 (5단계)
+
+브로커를 Amazon SQS로 바꾼다. **발행 코드·태스크·DB 조회는 하나도 바뀌지 않는다** — `.env`와 자격 증명만 다르다.
+
+### 사용자가 준비하는 것
+
+애플리케이션은 AWS 자원을 만들지 않는다 (dev-plan §1). 큐·IAM은 사람이 준비한다.
+
+1. **Standard 큐** 생성. FIFO가 아니다. **큐 이름은 `CELERY_QUEUE`와 정확히 같아야 한다** (기본 `jobs`) — `predefined_queues`의 키가 Celery 큐 이름이기 때문이다 (R14).
+2. 암호화는 **SSE-SQS(기본값)** 로 둔다. SSE-KMS로 바꾸면 `kms:Decrypt`·`kms:GenerateDataKey` 권한이 추가로 필요하다.
+3. **IAM 사용자**를 따로 만들고 이 큐에만 권한을 준다. 컨테이너가 `~/.aws`를 통째로 보게 되므로 전용 사용자가 안전하다.
+4. 액세스 키를 발급받아 **프로파일로 등록**한다. `.env`에 키를 쓰지 않는다.
+
+```powershell
+aws configure --profile retro-msg-queue
+```
+
+### 필요한 권한
+
+이 MVP가 실제로 호출하는 SQS API는 네 개다.
+
+| API | 호출 주체 |
+|---|---|
+| `sqs:SendMessage` | 발행자 (`apply_async`) |
+| `sqs:ReceiveMessage` | 워커 (롱 폴링) |
+| `sqs:DeleteMessage` | 워커 (수신 직후 ACK, `task_acks_late=False`) |
+| `sqs:GetQueueAttributes` | kombu 내부 |
+
+`predefined_queues`로 기존 큐를 참조하므로 `CreateQueue`·`ListQueues`는 필요 없다. `task_acks_late=False`이고 백오프 정책도 쓰지 않으므로 `ChangeMessageVisibility`도 필요 없다. 실험 편의(`PurgeQueue` 등)를 남기려면 Action을 `sqs:*`로 두되 **Resource를 그 큐 하나로 한정**한다.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["sqs:*"],
+      "Resource": "arn:aws:sqs:<리전>:<계정ID>:jobs"
+    }
+  ]
+}
+```
+
+`AmazonSQSFullAccess`를 붙여도 동작은 하지만 내용이 `{"Action": ["sqs:*"], "Resource": "*"}`라서 계정 전체·전 리전의 모든 큐가 대상이 된다. 권장하지 않는다.
+
+### `.env`
+
+```
+BROKER_KIND=sqs
+SQS_REGION=ap-northeast-2
+SQS_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/<계정ID>/jobs
+AWS_PROFILE=retro-msg-queue
+```
+
+`AWS_PROFILE`은 **`.env`에만** 둔다. compose의 `environment:` 블록은 `env_file:`보다 우선하므로, 거기에 같은 키를 두면 `.env` 값이 조용히 무시된다. 자격 증명 자체는 `~/.aws`를 읽기전용으로 마운트해 전달한다 — `.env`에는 키가 들어가지 않는다.
+
+### 기동
+
+**`--profile redis`를 붙이지 않는다.** redis 컨테이너는 SQS 실행 내내 떠 있으면 안 된다.
+
+```powershell
+docker compose up -d --build
+```
+
+`BROKER_KIND`(`.env`)와 compose 프로필은 서로를 강제하지 않는다 (R16). `--profile sqs`라는 것은 없다 — 매칭되는 서비스가 없어 no-op이다.
+
+### 기동 검증 (R14)
+
+설정이 틀리면 **기동 자체가 실패해야 한다.** 실패가 정상 동작이다.
+
+```powershell
+docker compose run --rm -e SQS_QUEUE_URL= api python -c "import app.celery_app"
+```
+
+```
+RuntimeError: BROKER_KIND=sqs requires SQS_REGION and SQS_QUEUE_URL
+```
+
+```powershell
+docker compose run --rm -e CELERY_QUEUE=orders api python -c "import app.celery_app"
+```
+
+```
+RuntimeError: SQS_QUEUE_URL must end with /orders (CELERY_QUEUE), got https://sqs.../jobs
+```
+
+### 연결·권한 확인법
+
+자격 증명이 컨테이너 안에서 잡히는지:
+
+```powershell
+docker compose run --rm api python -c `
+  "import boto3; s=boto3.Session(); print(s.profile_name, s.get_credentials().method)"
+```
+
+워커 기동 로그에 두 줄이 나와야 한다.
+
+```
+Connected to sqs://localhost//
+Found credentials in shared credentials file: ~/.aws/credentials
+```
+
+`sqs://localhost//`의 `localhost`는 **실제 접속 대상이 아니다.** broker URL이 자격 증명 없는 `sqs://`라서 Celery가 빈 호스트를 그렇게 출력할 뿐이고, 실제 대상은 transport option의 `predefined_queues`에 있는 큐 URL이다.
+
+증상별 원인:
+
+| 증상 | 원인 |
+|---|---|
+| `NoCredentialsError` | `AWS_PROFILE` 미설정이거나 `~/.aws` 마운트 실패 |
+| `AccessDenied` on `SendMessage` | IAM 정책의 Resource가 이 큐와 다름 |
+| `AccessDenied` on `ListQueues` | **정상** — 좁힌 정책에서는 거부된다. 이 MVP는 호출하지 않는다 |
+| `UndefinedQueueException` | 큐 이름 ≠ `CELERY_QUEUE`. R14 검증이 먼저 막아야 정상 |
+
+### 큐 상태 관측
+
+SQS에는 `redis-cli llen`에 해당하는 것이 없다. 큐 속성을 조회한다.
+
+```powershell
+aws sqs get-queue-attributes --profile retro-msg-queue --region ap-northeast-2 `
+  --queue-url <큐URL> `
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+```
+
+**`Approximate`라는 이름 그대로 근사값이다.** `llen`과 달리 즉시 정확한 값을 보장하지 않으므로, 0이라는 관측 하나로 "큐가 비었다"를 단정하지 않는다.
+
+### visibility timeout과 ACK
+
+| 항목 | 값 |
+|---|---|
+| 큐 VisibilityTimeout | 30초 (기본값) |
+| MessageRetentionPeriod | 345600초 (4일, 기본값) |
+| `task_acks_late` | `False` |
+| transport `wait_time_seconds` | 10 (롱 폴링) |
+| transport `polling_interval` | 1 |
+
+`task_acks_late=False`이므로 **워커는 메시지를 받자마자 삭제하고 나서 실행한다.** 따라서 visibility timeout 30초는 이 설정에서는 사실상 쓰이지 않는다 — 실행이 30초를 넘겨도 재전달되지 않고, 실행 중 워커가 죽으면 메시지는 이미 사라진 뒤다. 이 조합을 뒤집는 실험(`acks_late=True` × visibility timeout 초과)은 후속이다 (E8, §13-7).
+
+---
+
 ## 패키지·이미지 버전
 
 `pip index versions`로 2026-09-20 시점 최신 안정판을 확인해 `==`로 고정했다. 아래는 컨테이너에서 실제 확인한 값이다.
@@ -515,7 +660,17 @@ dev-plan §7 "2단계 검증 항목". `max_retries: 0`을 적용하기 **전에*
 | R13 | E6b에서만 worker `--concurrency=2`, `TASK_DELAY_SEC=3` | concurrency=1에서는 사전 조회가 항상 먼저 걸려 조건부 UPDATE의 `rowcount=0` 분기가 **어떤 실험에서도 실행되지 않는다**. §1 제약의 의도적 이탈이며 실험 후 1로 되돌렸다 |
 | 추가 | `run.py backlog`에 `jobs_without_outbox` 카운터 | E0이 남기는 상태(아웃박스 행이 아예 없는 업무)를 센다. `outbox_pending`(대기)과 대비되는 유실 지표 |
 
-R14~R16(SQS)은 5단계 미실행이므로 코드에만 있고 실측 기록이 없다.
+### R14~R16 (5단계 적용)
+
+| # | 결정 | 이유 | 실측 |
+|---|---|---|---|
+| R14 | `SQS_QUEUE_NAME` 환경변수를 두지 않는다. `predefined_queues`의 키는 `CELERY_QUEUE`이고, `SQS_QUEUE_URL`이 `/{CELERY_QUEUE}`로 끝나지 않으면 기동 실패 | kombu SQS transport는 Celery 큐 이름으로 `predefined_queues`를 조회한다. 불일치는 발행 시점에야 `UndefinedQueueException`으로 터지므로 기동에서 막는다 | 3종(빈 URL·빈 리전·이름 불일치) 모두 `RuntimeError`로 기동 차단 확인 |
+| R15 | `celery[sqs]`의 pycurl 빌드 의존성을 Dockerfile에 유지 | 5.5의 urllib3 전환이 5.6.0에서 되돌려졌다(처리량 회귀). kombu 5.6 `requirements/extras/sqs.txt`에 pycurl 있음 | 재빌드 없이 SQS 기동 성공 |
+| R16 | `--profile sqs`는 만들지 않는다. 기동은 `BROKER_KIND=redis` + `--profile redis` / `BROKER_KIND=sqs` + 프로필 없음 | `BROKER_KIND`(env)와 profile(compose)이 독립이라 어긋나도 아무도 막지 않는다 | SQS 실험 내내 redis 컨테이너 미기동 확인 |
+| 추가 | 자격 증명은 `~/.aws`를 `/root/.aws:ro`로 마운트해 전달하고, `AWS_PROFILE`은 `.env`에만 둔다 | `.env`에 AWS 키를 넣지 않는다는 원칙(§9)을 지키면서 컨테이너에 자격 증명을 넣는 방법. compose `environment:`가 `env_file:`보다 우선하므로 양쪽에 두면 `.env`가 무시된다 | 컨테이너 안에서 `shared-credentials-file`로 해석, IAM 사용자 `sqs-user` 확인 |
+| 추가 | 호스트 API 포트를 `${API_PORT:-8000}`으로 변수화 | 다른 프로젝트가 8000을 쓰고 있을 때 충돌한다. 실험은 compose 네트워크(`http://api:8000`)로 돌므로 이 매핑에 의존하지 않는다 | `API_PORT=8001`로 전체 실험 수행 |
+
+**`predefined_queues`에 키를 쓰지 않아도 되는 근거** — kombu `transport/SQS.py`의 `new_sqs_client()`는 `q.get('access_key_id', self.conninfo.userid)`로 키를 받아 `boto3.session.Session(aws_access_key_id=...)`에 그대로 넘긴다. `Connection("sqs://")`의 `userid`/`password`는 빈 문자열이 아니라 **`None`**이고, `boto3.Session(aws_access_key_id=None)`은 기본 자격 증명 체인으로 떨어진다. 공식 문서 예시는 모두 키를 항목 안에 직접 넣지만, 넣지 않는 경로도 지원된다.
 
 ---
 
@@ -534,9 +689,20 @@ R14~R16(SQS)은 5단계 미실행이므로 코드에만 있고 실측 기록이 
 | E7 | HTTP 중복 접수 | **통과** | [E7-20260920-1](reports/E7-20260920-1.md) |
 | E8 | 워커 kill × acks_late | 후속 (범위 밖) | — |
 
-SQS(5단계)는 실제 연결·실험을 수행하지 않았다. **미실행**으로 남긴다 — Redis 결과로 대신하지 않는다.
+위 표는 Redis 브로커 실행분이다.
 
-SQS(5단계)는 실제 연결·실험을 수행했을 때만 체크한다. Redis 결과로 대신하지 않는다.
+### SQS 재실행 (5단계)
+
+dev-plan §9가 최초 SQS 검증을 E1·E3·E5로 제한한다. Redis 리포트를 덮어쓰지 않고 별도 파일로 남겼다.
+
+| # | 실험 | 상태 | 리포트 |
+|---|---|---|---|
+| E1 | 정상 흐름 | **통과** | [E1-20260921-2](reports/E1-20260921-2.md) |
+| E3 | 발행자 중단 | **통과** | [E3-20260921-2](reports/E3-20260921-2.md) |
+| E5 | 발행 후 기록 전 중단 | **통과** | [E5-20260921-2](reports/E5-20260921-2.md) |
+| E0 · E2 · E4 · E6 · E6b · E7 | — | SQS 미실행 | Redis 결과로 대신하지 않는다 |
+
+**세 실험 모두 Redis와 결과가 같았다.** 이 실험들이 확인하는 것이 브로커의 성질이 아니라 **DB 커밋과 발행을 분리한 구조의 성질**이기 때문이다. 차이가 드러난 곳은 관측 수단(`redis-cli llen` → `get-queue-attributes`, 근사값)과 자격 증명 경로뿐이다.
 
 ---
 

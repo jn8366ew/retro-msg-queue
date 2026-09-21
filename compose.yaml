@@ -28,9 +28,15 @@ services:
       API_CRASH_BEFORE_OUTBOX: ${API_CRASH_BEFORE_OUTBOX:-0}
       LEGACY_INLINE_PUBLISH: ${LEGACY_INLINE_PUBLISH:-0}
       API_CRASH_AFTER_COMMIT: ${API_CRASH_AFTER_COMMIT:-0}
+    # 자격 증명은 .env가 아니라 호스트 프로파일에서 온다 (dev-plan §9). 읽기전용 고정.
+    # 어느 프로파일을 쓸지는 .env의 AWS_PROFILE이 정한다 — 여기 environment에 두면 .env를 덮어쓴다
+    volumes:
+      - ${USERPROFILE:-$HOME}/.aws:/root/.aws:ro
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # 호스트 포트가 다른 프로젝트와 겹칠 때 $env:API_PORT로 옮긴다.
+    # 실험은 compose 네트워크(http://api:8000)로 도므로 이 매핑에 의존하지 않는다
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     restart: "no"
     depends_on:
       postgres:
@@ -41,6 +47,8 @@ services:
     env_file: .env
     environment:
       PUBLISHER_CRASH_AFTER_SEND: ${PUBLISHER_CRASH_AFTER_SEND:-0}
+    volumes:
+      - ${USERPROFILE:-$HOME}/.aws:/root/.aws:ro
     # exec 형식. sh -c 로 감싸면 sh가 PID 1이 되어 SIGTERM을 파이썬에 전달하지 않는다 (R7)
     command: ["python", "-m", "app.publisher"]
     # os._exit(1) 후 무한 재기동을 막는다 (E5)
@@ -56,6 +64,8 @@ services:
     environment:
       # E6b에서 셸 env로 올린다 (R13). 동시 실행 창을 넓혀야 조건부 UPDATE 경합이 관측된다
       TASK_DELAY_SEC: ${TASK_DELAY_SEC:-1}
+    volumes:
+      - ${USERPROFILE:-$HOME}/.aws:/root/.aws:ro
     # exec 형식. ${...}는 compose가 셸 env·.env로 치환하므로 sh -c가 필요 없다 (R7).
     # E6b에서 $env:CELERY_CONCURRENCY="2"로 올린다 (R13).
     command:
