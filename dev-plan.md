@@ -2,7 +2,7 @@
 
 - 작성일: 2026-09-17
 - 갱신일: 2026-09-20 (v3 — 면접 정리 문서 대조·라이브러리 실동작 검증 반영. v2는 같은 날 구현 착수용 확정본)
-- 상태: **1~4단계 구현·실험 완료 (2026-09-20).** 실험 9개(E0~E7, E6b) 실행하고 `reports/`에 기록. SQS(5단계) 미실행. 실측 결과는 README "결정 기록"과 각 리포트에 있으며, 이 문서의 예상과 다른 값은 해당 절에 표시했다.
+- 상태: **1~6단계 완료 (2026-09-21).** Redis 실험 9개 + SQS 재실행 3개(E1·E3·E5) + SQS 전용 2개(E8 재전달·E9 DLQ)를 `reports/`에 기록. 실측 결과는 README "결정 기록"과 각 리포트에 있으며, 이 문서의 예상과 다른 값은 해당 절에 표시했다.
 - 대조 문서: `insurance_message_queue_interview_notes_2026-09-16.md` — 과거 보험 프로젝트의 실제 구성·미확인 사항·학습한 개선안. 이 MVP가 그중 어느 공백을 겨냥하는지는 §14.
 - 진행 상태: `roadmap.md` (단계별 체크리스트). 이 문서는 설계·결정, 로드맵은 진행만 기록한다.
 - 실행 순서: **Redis 프로필로 로컬 실험 전부 완료 → 동일 코드로 SQS 프로필 연결**
@@ -67,6 +67,9 @@ v2를 면접 정리 문서와 대조하고, kombu·celery 소스로 발행 경�
 | R14 | 5 | `SQS_QUEUE_NAME` 환경변수 제거. `predefined_queues`의 키는 `CELERY_QUEUE` | kombu SQS transport는 Celery 큐 이름으로 `predefined_queues`를 조회한다 — 불일치 시 `UndefinedQueueException` |
 | R15 | 5 | `celery[sqs]`의 pycurl 빌드 의존성(v2 #8) 유지 | 5.5의 urllib3 전환이 5.6.0에서 되돌려졌다(처리량 회귀). kombu 5.6 `requirements/extras/sqs.txt`에 pycurl 있음 |
 | R16 | — | `--profile sqs`는 매칭 서비스가 없어 no-op. 기동 명령은 `BROKER_KIND=redis` + `--profile redis` / `BROKER_KIND=sqs` + 프로필 없음 | `BROKER_KIND`(env)와 profile(compose)이 독립이라 어긋나도 아무도 막지 않는다. README에 명시 |
+| R17 | 6 | §13-2·§13-7을 **E8(브로커 재전달)·E9(독약 메시지와 DLQ)** 로 승격. **SQS 전용** — Redis 대조는 하지 않는다 (사용자 결정 2026-09-21) | `acks_late=False`에서는 재전달 경로가 닫혀 있어 1~5단계 실험에서 SQS/Redis 차이가 한 번도 관측되지 않았다. DLQ는 Redis transport에 대응물이 없다 |
+| R18 | 6 | `TASK_ACKS_LATE`·`TASK_REJECT_ON_WORKER_LOST` env 분기, 기본 0(기존 동작 불변). E8·E9에서만 셸 env로 1 | §13-7 스케치대로 같은 코드로 양쪽을 본다. 기본값 불변이라 기존 실험 재현성이 유지된다 |
+| R19 | 6 | 독약 메시지는 `TASK_CRASH_BEFORE_ADOPT=1` — 워커 자식이 계산 후 채택 직전 `os._exit(1)`. 재전달은 `task_reject_on_worker_lost=True`가 만든다. DLQ는 `jobs-dlq`, maxReceiveCount=3 (사용자 결정) | 컨테이너 안에서 자식이 PID 1에 보내는 SIGKILL은 커널이 무시하므로 컨테이너 전체 자살은 불가능하다. 자식만 죽이면 부모가 WorkerLostError를 받고, reject_on_worker_lost=True일 때만 미ack로 되돌린다(=§13-2가 물으려던 관계). 3회 = 최초 1 + 재전달 2 |
 
 ---
 
@@ -424,6 +427,8 @@ SQS_QUEUE_URL=
 | E6 | 중복 전달 (직렬) | E1 완료 후 `run.py republish --event-id N` 2회 | 워커 로그 `already_done` 2건, result.execution_id 불변. concurrency=1이라 `rejected_already_done`은 나오지 않는다 |
 | E6b | **중복 전달 (동시)** | 워커를 `--concurrency=2`, `TASK_DELAY_SEC=3`으로 재기동 → `compose stop publisher` → create → `republish --event-id N` 2회 연속(둘 다 sleep 창 안에 도달) → 워커 로그 → `compose start publisher` | 한쪽 `adopted`, 다른 쪽 `rejected_already_done`(rowcount 0). 발행자 재시작 후 세 번째 실행은 `already_done`. result.execution_id는 adopted 쪽 하나. 조건부 UPDATE가 실제로 동작함을 보는 유일한 실험 (R13) |
 | E7 | HTTP 중복 접수 | 같은 request_key·같은 value 재요청, 다른 value 재요청 | 200 동일 job_id / 409, 행 수 불변 (`run.py count`) |
+| E8 | **브로커 재전달 (SQS 전용, 6단계)** | `BROKER_KIND=sqs`. ① 대조: 기본 설정(`TASK_ACKS_LATE=0`) + `TASK_DELAY_SEC=20`으로 워커 재기동 → create → 워커 `phase=start` 확인 → `compose kill worker` → 워커 재기동 → 60초 이상 관측. ② 본실험: `TASK_ACKS_LATE=1`로 같은 절차 | ① 메시지는 수신 즉시 삭제됐으므로 재전달 없음 — `SENT + jobs.PENDING` **영구 잔류** (§13-3의 실물). ② visibility timeout(30초) 후 같은 메시지 재수신 → 새 execution_id로 `adopted`, jobs.DONE. 재전달과 멱등성의 협동 |
+| E9 | **독약 메시지와 DLQ (SQS 전용, 6단계)** | 사전: `jobs-dlq` 생성 + `jobs`에 redrive(maxReceiveCount=3, 사용자 준비) → `TASK_ACKS_LATE=1 TASK_REJECT_ON_WORKER_LOST=1 TASK_CRASH_BEFORE_ADOPT=1`로 워커 재기동 → create → 워커 로그에서 자식 사망 3회 관측 → `jobs-dlq` 메시지 수 조회 → 플래그 끄고 재기동 | 수신 3회(최초+재전달 2) 동안 매번 `injected_crash` 후 WorkerLostError, 4번째 전달 대신 메시지가 `jobs-dlq`로 이동. **jobs는 PENDING 잔류 — DLQ는 전달 루프를 끊을 뿐 업무를 복구하지 않는다.** 재전달 간격(즉시 0초인지 visibility timeout 30초인지)은 kombu reject 구현에 달렸으므로 실측해 기록한다 |
 
 ### 리포트 형식 (`reports/<run_id>.md`)
 
@@ -450,6 +455,8 @@ SQS_QUEUE_URL=
 - [x] pytest가 통과했다.
 - [x] README에 실행 방법·패키지 버전·결정 기록을 남겼다.
 - [x] SQS는 실제 연결·실험(E1, E3, E5)을 수행했을 때만 체크한다. — 2026-09-21 수행, 리포트 3개.
+- [x] E8 — acks_late 0/1 대조로 메시지 소실과 재전달을 관측했다 (SQS). — 2026-09-21, 재전달 간격 30.003초
+- [x] E9 — 독약 메시지가 3회 수신 후 DLQ로 이동하고 jobs가 PENDING으로 남는 것을 관측했다 (SQS). — 2026-09-21, 재전달 간격 10초(`wait_time_seconds`)
 
 ---
 
@@ -614,12 +621,12 @@ pytest는 `docker compose exec api pytest -q`로 실행한다. `conftest.py`가 
 ## 13. 후속 논의 항목
 
 1. 다중 발행자 — `FOR UPDATE SKIP LOCKED` vs 점유 만료. 전송 중 락 유지 여부.
-2. `task_acks_late=True` + `task_reject_on_worker_lost` + SQS visibility timeout의 관계. 워커 강제 종료 실험.
+2. ~~`task_acks_late=True` + `task_reject_on_worker_lost` + SQS visibility timeout의 관계. 워커 강제 종료 실험.~~ → **6단계 E8·E9로 승격 (R17)**
 3. `SENT + PENDING` 탐지 — 실행 시작 기록(점유 상태·시각·토큰)과 오래된 미완료 자동 재발행.
 4. 커밋 직후 즉시 발행 + 주기 복구 혼합, 두 경로의 경합.
 5. DB 밖 부작용(파일 저장) 추가 시 멱등성 범위 — 실행별 경로 + DB 채택 포인터.
 6. 빠른 작업·느린 작업의 큐·워커 분리 비교.
-7. **E8** — 워커 강제 종료(`docker compose kill worker`) × `task_acks_late` × Redis `visibility_timeout`. False면 메시지 소실·`SENT + PENDING` 영구 잔류, True면 visibility_timeout 후 재전달. 면접 정리 Q7·7.5절의 실증. `CELERY_ACKS_LATE`·`REDIS_VISIBILITY_TIMEOUT`을 env로 빼면 같은 코드로 양쪽을 본다. 2번과 합쳐 진행 (U4로 이번 범위에서 제외).
+7. **E8** — 워커 강제 종료(`docker compose kill worker`) × `task_acks_late` × Redis `visibility_timeout`. False면 메시지 소실·`SENT + PENDING` 영구 잔류, True면 visibility_timeout 후 재전달. 면접 정리 Q7·7.5절의 실증. `CELERY_ACKS_LATE`·`REDIS_VISIBILITY_TIMEOUT`을 env로 빼면 같은 코드로 양쪽을 본다. 2번과 합쳐 진행 (U4로 이번 범위에서 제외). → **6단계로 승격 (R17). 단 Redis 대조는 제외 — SQS 전용**
 8. `outbox_events.job_id UNIQUE` 해제 + `version` — 재발행 버전마다 새 이벤트 행. 이번 MVP에서 `republish`가 행을 만들지 않는 이유가 이 제약이다.
 
 이번 학습 결과는 **결론 → 제약 → 대안 → 대조** 순서로 설명한다. 기존 보험 프로젝트의 실제 구현과 이번 실습을 구분한다.

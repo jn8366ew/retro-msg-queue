@@ -47,9 +47,10 @@ app.conf.update(
     accept_content=["json"],
     task_ignore_result=True,
     result_backend=None,
-    # 기본값 명시. 중단 복구 실험(E8)은 후속 — dev-plan §13-7
-    task_acks_late=False,
-    task_reject_on_worker_lost=False,
+    # 기본 False(수신 즉시 ACK). E8·E9에서만 셸 env로 1 (R18) — dev-plan §8
+    task_acks_late=settings.task_acks_late,
+    # 자식 프로세스 사망(WorkerLostError) 시 미ack로 되돌릴지. E9의 재전달을 이것이 만든다 (R19)
+    task_reject_on_worker_lost=settings.task_reject_on_worker_lost,
     worker_prefetch_multiplier=1,
     # 발행자 루프가 재시도를 담당한다. 연결 수립 재시도는 이것과 별개 (R9)
     task_publish_retry=False,
@@ -59,8 +60,10 @@ app.conf.update(
 )
 
 log.info(
-    "celery_configured broker_kind=%s queue=%s transport_options=%s",
+    "celery_configured broker_kind=%s queue=%s acks_late=%s reject_on_worker_lost=%s transport_options=%s",
     settings.broker_kind,
     settings.celery_queue,
+    settings.task_acks_late,
+    settings.task_reject_on_worker_lost,
     broker_transport_options,
 )

@@ -64,6 +64,10 @@ services:
     environment:
       # E6b에서 셸 env로 올린다 (R13). 동시 실행 창을 넓혀야 조건부 UPDATE 경합이 관측된다
       TASK_DELAY_SEC: ${TASK_DELAY_SEC:-1}
+      # 6단계 E8·E9 전용 (R18·R19). 기본 0 = 기존 동작
+      TASK_ACKS_LATE: ${TASK_ACKS_LATE:-0}
+      TASK_REJECT_ON_WORKER_LOST: ${TASK_REJECT_ON_WORKER_LOST:-0}
+      TASK_CRASH_BEFORE_ADOPT: ${TASK_CRASH_BEFORE_ADOPT:-0}
     volumes:
       - ${USERPROFILE:-$HOME}/.aws:/root/.aws:ro
     # exec 형식. ${...}는 compose가 셸 env·.env로 치환하므로 sh -c가 필요 없다 (R7).

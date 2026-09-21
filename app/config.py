@@ -33,6 +33,10 @@ class Settings:
     task_delay_sec: float
     # 발행 전용 연결의 kombu 연결 수립 재시도 횟수 (R9). 빈 값이면 덮어쓰지 않는다(스펙 기본 동작).
     publish_connect_max_retries: int | None
+    # 6단계 — E8·E9 (R18·R19). 기본 0 = 기존 동작
+    task_acks_late: bool
+    task_reject_on_worker_lost: bool
+    task_crash_before_adopt: bool
     sqs_region: str
     sqs_queue_url: str
 
@@ -57,6 +61,9 @@ def load_settings() -> Settings:
         publish_connect_max_retries=(
             int(_raw) if (_raw := _env("PUBLISH_CONNECT_MAX_RETRIES", "0")) != "" else None
         ),
+        task_acks_late=_flag("TASK_ACKS_LATE"),
+        task_reject_on_worker_lost=_flag("TASK_REJECT_ON_WORKER_LOST"),
+        task_crash_before_adopt=_flag("TASK_CRASH_BEFORE_ADOPT"),
         sqs_region=_env("SQS_REGION"),
         sqs_queue_url=_env("SQS_QUEUE_URL"),
     )

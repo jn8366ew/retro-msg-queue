@@ -5,6 +5,7 @@
 """
 
 import logging
+import os
 import time
 from uuid import uuid4
 
@@ -52,6 +53,11 @@ def compute(self, job_id: int, event_id: int | None) -> dict:
 
     time.sleep(settings.task_delay_sec)
     result = {"value": value, "square": value * value, "execution_id": execution_id}
+
+    if settings.task_crash_before_adopt:
+        # E9 독약 메시지 (R19). 자식만 죽는다 — 재전달 여부는 acks_late × reject_on_worker_lost가 정한다
+        log.error(kv("injected_crash", flag="TASK_CRASH_BEFORE_ADOPT", **ctx))
+        os._exit(1)
 
     with session_scope() as s:
         rowcount = adopt_result(s, job_id, result)

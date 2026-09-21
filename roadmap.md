@@ -66,8 +66,20 @@
 - [x] README SQS 절: 권한, 연결 오류 확인법, visibility timeout·ACK 기록
 - [x] `git commit -m "step 5: ..."` → **SQS 전환 완료 (E1·E3·E5)**
 
+## 6단계 — 브로커 재전달·DLQ (SQS 전용, R17~R19)
+
+완료 (2026-09-21). [E8](reports/E8-20260921-1.md) · [E9](reports/E9-20260921-1.md).
+
+- [x] `TASK_ACKS_LATE`·`TASK_REJECT_ON_WORKER_LOST`·`TASK_CRASH_BEFORE_ADOPT` env 분기 (기본 0, pytest 18건 통과)
+- [x] **E8** 실행 → 리포트 — 대조군(acks_late=0) 재전달 0건·SENT+PENDING 영구 잔류 / 본실험(=1) **30.003초 후 같은 task_id로 재전달**, DONE
+- [x] 사용자 준비: `jobs-dlq` Standard 큐, `jobs`에 redrive(maxReceiveCount=3), IAM Resource에 DLQ ARN 추가
+- [x] **E9** 실행 → 리포트 — 수신 3회 후 DLQ 이동, jobs.PENDING 잔류. 재전달 간격 **10.07·10.12초 = `wait_time_seconds`** (큐 VT 30초 아님)
+- [x] api·publisher 이미지 재빌드 (`--build` — worker만 새 코드로 빌드된 상태)
+- [x] README: 실험 표·결정 기록 반영 + 첫 화면 재배치(A안 — 한 문장·실험 표·실측 하이라이트·비보장 요약을 상단으로)
+- [x] `git commit -m "step 6: ..."` → **브로커 재전달·DLQ 완료 (E8·E9)**
+
 ## 후속 (이번 범위 밖, §13)
 
-- [ ] E8 — 워커 kill × `acks_late` × `visibility_timeout`
+- [x] ~~E8 — 워커 kill × `acks_late` × `visibility_timeout`~~ → 6단계에서 완료 (SQS 전용, E9 DLQ 포함)
 - [ ] `outbox.job_id UNIQUE` 해제 + `version`
 - [ ] 다중 발행자 SKIP LOCKED / 즉시 발행 + 주기 복구 / `SENT + PENDING` 탐지

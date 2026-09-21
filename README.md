@@ -7,7 +7,46 @@
 - 과거 프로젝트 정리: `insurance_message_queue_interview_notes_2026-09-16.md` (개인 자료, git 미추적)
 - 실습 회고: `retrospective.md` — 과거 프로젝트의 미확인 지점과 실험의 대응 (개인 자료, git 미추적)
 
-**로컬 아웃박스 MVP 완료 (1~4단계).** 실험 9개 전부 실행하고 리포트를 남겼다. **SQS(5단계)는 E1·E3·E5를 실제 큐로 재실행해 통과했다** — 나머지 실험은 Redis 결과만 있다.
+**한 문장으로:** 업무 접수와 발행 의도를 한 트랜잭션에 커밋하고(아웃박스), 발행·전달·실행이 어디서 끊기든 업무가 유실되지 않거나 **유실된 것이 DB에 드러나게** 하며, 결과는 조건부 UPDATE로 **한 번만** 채택한다. 실행 자체가 한 번이라고는 보장하지 않는다.
+
+1~6단계 완료. Redis로 실험 9개, SQS로 재실행 3개와 SQS 전용 실험 2개(E8 재전달, E9 DLQ)를 실제로 돌리고 리포트를 남겼다.
+
+## 실험
+
+| # | 묻는 것 | Redis | SQS |
+|---|---|---|---|
+| E0 | 대조군 — 아웃박스 없는 과거 방식은 실제로 유실되는가 | [통과](reports/E0-20260920-1.md) | — |
+| E1 | 정상 흐름 | [통과](reports/E1-20260920-1.md) | [통과](reports/E1-20260921-2.md) |
+| E2 | 트랜잭션 롤백 — 반쪽 커밋이 남는가 | [통과](reports/E2-20260920-1.md) | — |
+| E3 | 발행자 중단 — 적체로 남고 스스로 복구되는가 | [통과](reports/E3-20260920-1.md) | [통과](reports/E3-20260921-2.md) |
+| E4 | 브로커 접속 실패 | [통과](reports/E4-20260920-1.md) | — |
+| E5 | 발행 후 기록 전 중단 — 재발행 중복이 결과를 덮어쓰는가 | [통과](reports/E5-20260920-1.md) | [통과](reports/E5-20260921-2.md) |
+| E6 | 중복 전달 (직렬) | [통과](reports/E6-20260920-1.md) | — |
+| E6b | 중복 전달 (동시) — 조건부 UPDATE가 승자를 가리는가 | [통과](reports/E6b-20260920-1.md) | — |
+| E7 | HTTP 중복 접수 | [통과](reports/E7-20260920-1.md) | — |
+| E8 | 워커 kill × `acks_late` — 메시지는 소실되는가, 재전달되는가 | — | [통과](reports/E8-20260921-1.md) |
+| E9 | 독약 메시지 — DLQ가 반복을 끊는가, 업무는 어떻게 남는가 | — | [통과](reports/E9-20260921-1.md) |
+
+`—`는 실행하지 않았다는 뜻이다. 한 브로커의 결과로 다른 브로커의 칸을 채우지 않는다. E1·E3·E5가 두 브로커에서 같았던 것은 이들이 브로커가 아니라 **DB 커밋과 발행을 분리한 구조**를 확인하기 때문이다. 브로커의 차이는 ACK 시점을 바꾼 E8부터 드러났다. E8·E9는 SQS 전용으로 진행했다 — DLQ는 Redis transport에 대응물이 없다 (R17).
+
+## 실측 하이라이트 — 예상과 달랐던 것
+
+1. **브로커가 죽었을 때 `apply_async`는 예상 6초가 아니라 10초 걸렸다.** `docker compose stop`이 컨테이너 DNS 항목을 지워 이름 해석 실패가 되고, 그 자체가 3.9초다. 재시도를 꺼도(`max_retries: 0`) 3.9초 밑으로는 못 줄인다 (R9, [E1](reports/E1-20260920-1.md)).
+2. **`outbox.SENT + jobs.PENDING` 상태가 8초간 실제로 존재했다.** 브로커 복구 뒤 워커의 재접속 백오프 때문이다. "보냈는데 안 끝남"이 이론이 아니라 관측된 상태다 ([E4](reports/E4-20260920-1.md)).
+3. **조건부 UPDATE의 `rowcount=0` 분기는 동시 실행을 억지로 만들어야만 실행됐다.** concurrency 1에서는 사전 조회가 항상 먼저 걸러서, 핵심 보장 장치가 E1~E7 어디서도 돌지 않았다. concurrency 2와 3초 지연을 줘서 두 실행이 7밀리초 차이로 갈리는 것을 봤다 (R13, [E6b](reports/E6b-20260920-1.md)).
+4. **재전달 간격을 정하는 값이 죽는 방식에 따라 다른 곳에 있었다.** 워커 전체가 죽으면 큐의 VisibilityTimeout(30.003초), 자식만 죽어 부모가 되돌리면 kombu의 `wait_time_seconds`(10.07초)였다 ([E8](reports/E8-20260921-1.md), [E9](reports/E9-20260921-1.md)).
+
+---
+
+## 이 MVP가 보장하지 않는 것
+
+- DB와 브로커를 하나의 원자적 트랜잭션으로 묶는 것.
+- 함수 실행이 반드시 한 번뿐인 것. 보장하는 것은 **채택된 DB 결과가 한 번만 반영되고 덮어써지지 않는 것**이다.
+- `outbox.SENT + jobs.PENDING`에서 "워커 미도달", "실행 중 중단", "메시지 소실"(E8, `acks_late=False`), "DLQ 격리"(E9)를 구분하는 것. 구분하려면 실행 시작 기록(점유 상태·시각·토큰)이 필요하다.
+- DB 밖 부작용(결제·파일·메일)의 중복 방지. 이 MVP는 DB 결과 저장만 다룬다.
+- DLQ로 간 업무의 복구. DLQ는 전달 반복을 끊을 뿐이고, 업무는 `PENDING`으로 남는다 (E9). 되돌리기(redrive)는 사람이 한다.
+
+자세한 것은 dev-plan.md §10, 후속 항목은 §13.
 
 ---
 
@@ -586,7 +625,7 @@ aws sqs get-queue-attributes --profile retro-msg-queue --region ap-northeast-2 `
 | transport `wait_time_seconds` | 10 (롱 폴링) |
 | transport `polling_interval` | 1 |
 
-`task_acks_late=False`이므로 **워커는 메시지를 받자마자 삭제하고 나서 실행한다.** 따라서 visibility timeout 30초는 이 설정에서는 사실상 쓰이지 않는다 — 실행이 30초를 넘겨도 재전달되지 않고, 실행 중 워커가 죽으면 메시지는 이미 사라진 뒤다. 이 조합을 뒤집는 실험(`acks_late=True` × visibility timeout 초과)은 후속이다 (E8, §13-7).
+`task_acks_late=False`이므로 **워커는 메시지를 받자마자 삭제하고 나서 실행한다.** 따라서 visibility timeout 30초는 이 설정에서는 사실상 쓰이지 않는다 — 실행이 30초를 넘겨도 재전달되지 않고, 실행 중 워커가 죽으면 메시지는 이미 사라진 뒤다. 이 조합을 뒤집은 것이 E8·E9다 — `acks_late=True`에서 워커 전체가 죽으면 이 30초 뒤에 재전달되고(E8), 자식만 죽어 부모가 되돌리면 이 값이 아니라 `wait_time_seconds` 10초 뒤에 재전달된다(E9).
 
 ---
 
@@ -673,45 +712,12 @@ dev-plan §7 "2단계 검증 항목". `max_retries: 0`을 적용하기 **전에*
 
 **`predefined_queues`에 키를 쓰지 않아도 되는 근거** — kombu `transport/SQS.py`의 `new_sqs_client()`는 `q.get('access_key_id', self.conninfo.userid)`로 키를 받아 `boto3.session.Session(aws_access_key_id=...)`에 그대로 넘긴다. `Connection("sqs://")`의 `userid`/`password`는 빈 문자열이 아니라 **`None`**이고, `boto3.Session(aws_access_key_id=None)`은 기본 자격 증명 체인으로 떨어진다. 공식 문서 예시는 모두 키를 항목 안에 직접 넣지만, 넣지 않는 경로도 지원된다.
 
----
+### R17~R19 (6단계 적용)
 
-## 실험
-
-| # | 실험 | 상태 | 리포트 |
+| # | 결정 | 이유 | 실측 |
 |---|---|---|---|
-| E0 | 대조군 — 아웃박스 없는 과거 방식 | **통과** | [E0-20260920-1](reports/E0-20260920-1.md) |
-| E1 | 정상 흐름 | **통과** | [E1-20260920-1](reports/E1-20260920-1.md) |
-| E2 | 트랜잭션 롤백 | **통과** | [E2-20260920-1](reports/E2-20260920-1.md) |
-| E3 | 발행자 중단 | **통과** | [E3-20260920-1](reports/E3-20260920-1.md) |
-| E4 | 브로커 접속 실패 | **통과** | [E4-20260920-1](reports/E4-20260920-1.md) |
-| E5 | 발행 후 기록 전 중단 | **통과** | [E5-20260920-1](reports/E5-20260920-1.md) |
-| E6 | 중복 전달 (직렬) | **통과** | [E6-20260920-1](reports/E6-20260920-1.md) |
-| E6b | 중복 전달 (동시, concurrency=2) | **통과** | [E6b-20260920-1](reports/E6b-20260920-1.md) |
-| E7 | HTTP 중복 접수 | **통과** | [E7-20260920-1](reports/E7-20260920-1.md) |
-| E8 | 워커 kill × acks_late | 후속 (범위 밖) | — |
+| R17 | dev-plan §13-2·§13-7을 E8(재전달)·E9(DLQ)로 승격. **SQS 전용** | `acks_late=False`에서는 재전달 경로가 닫혀 있어 1~5단계에서 브로커 차이가 한 번도 드러나지 않았다. DLQ는 Redis transport에 대응물이 없다 | E8에서 처음으로 SQS VisibilityTimeout이 동작 |
+| R18 | `TASK_ACKS_LATE`·`TASK_REJECT_ON_WORKER_LOST`를 env로, 기본 0 | 같은 코드로 양쪽을 보고, 기본값 불변이라 1~5단계 재현성이 유지된다 | 기본값에서 pytest 18건 통과 |
+| R19 | 독약은 `TASK_CRASH_BEFORE_ADOPT=1` — 자식이 채택 직전 `os._exit(1)`. DLQ `jobs-dlq`, maxReceiveCount 3 | 컨테이너 안에서 자식이 PID 1에 보내는 SIGKILL은 커널이 무시한다. 자식만 죽이면 부모가 `WorkerLostError`를 받고, `reject_on_worker_lost=True`일 때만 되돌린다 | 수신 3회 후 DLQ 이동. 재전달 간격 10.07·10.12초 = `wait_time_seconds` |
 
-위 표는 Redis 브로커 실행분이다.
-
-### SQS 재실행 (5단계)
-
-dev-plan §9가 최초 SQS 검증을 E1·E3·E5로 제한한다. Redis 리포트를 덮어쓰지 않고 별도 파일로 남겼다.
-
-| # | 실험 | 상태 | 리포트 |
-|---|---|---|---|
-| E1 | 정상 흐름 | **통과** | [E1-20260921-2](reports/E1-20260921-2.md) |
-| E3 | 발행자 중단 | **통과** | [E3-20260921-2](reports/E3-20260921-2.md) |
-| E5 | 발행 후 기록 전 중단 | **통과** | [E5-20260921-2](reports/E5-20260921-2.md) |
-| E0 · E2 · E4 · E6 · E6b · E7 | — | SQS 미실행 | Redis 결과로 대신하지 않는다 |
-
-**세 실험 모두 Redis와 결과가 같았다.** 이 실험들이 확인하는 것이 브로커의 성질이 아니라 **DB 커밋과 발행을 분리한 구조의 성질**이기 때문이다. 차이가 드러난 곳은 관측 수단(`redis-cli llen` → `get-queue-attributes`, 근사값)과 자격 증명 경로뿐이다.
-
----
-
-## 이 MVP가 보장하지 않는 것
-
-- DB와 브로커를 하나의 원자적 트랜잭션으로 묶는 것.
-- 함수 실행이 반드시 한 번뿐인 것. 보장하는 것은 **채택된 DB 결과가 한 번만 반영되고 덮어써지지 않는 것**이다.
-- `outbox.SENT + jobs.PENDING`에서 "워커 미도달"과 "실행 중 중단"을 구분하는 것. 구분하려면 실행 시작 기록(점유 상태·시각·토큰)이 필요하다.
-- DB 밖 부작용(결제·파일·메일)의 중복 방지. 이 MVP는 DB 결과 저장만 다룬다.
-
-자세한 것은 dev-plan.md §10, 후속 항목은 §13.
+**E9 재전달 간격이 10초인 근거** — kombu `transport/SQS.py`의 `_put`은 reject(requeue)로 되돌아온 메시지(`redelivered`)를 다시 보내지 않고 `change_message_visibility(VisibilityTimeout=self.wait_time_seconds)`를 호출한다. 큐 속성이 아니라 transport option이 간격을 정한다. 같은 이유로 transport option `visibility_timeout`은 `predefined_queues`에서 효과가 없다 — kombu가 큐를 직접 만들 때만 쓰고 `receive_message`에는 넘기지 않는다.
