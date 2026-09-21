@@ -78,8 +78,24 @@
 - [x] README: 실험 표·결정 기록 반영 + 첫 화면 재배치(A안 — 한 문장·실험 표·실측 하이라이트·비보장 요약을 상단으로)
 - [x] `git commit -m "step 6: ..."` → **브로커 재전달·DLQ 완료 (E8·E9)**
 
+## 7단계 — `SENT + PENDING` 탐지·복구 (R20~R22)
+
+설계 확정 (2026-09-21), **개발 전.** 결정: 새 테이블 `job_executions`, 4분류(not_started·running·stalled·gave_up), T=60초, 수동 `run.py reconcile`, 미완료 실행 3건에서 포기.
+
+- [ ] `app/models.py`: `JobExecution` (dev-plan §4) — `create_all`이 생성
+- [ ] `app/tasks.py`: 시작 기록(계산 전 별도 커밋), 종료 기록(채택과 같은 트랜잭션, 세 반환 경로 모두)
+- [ ] `app/config.py`: `STALE_AFTER_SEC`(기본 60), `RECONCILE_MAX_UNFINISHED`(기본 3)
+- [ ] `experiments/run.py`: `backlog`에 4분류 카운터 추가(기존 `sent_but_job_pending` 유지), `reconcile` 명령 신설
+- [ ] `tests/`: 4분류 판정과 reconcile의 재발행·거부를 AWS 없이 고정
+- [ ] 동작 확인(Claude): 이미지 재빌드, pytest, 네 분류가 한 번씩 찍히는지 짧게 확인 — 실험 본편은 하지 않는다
+- [ ] **`practice/step7.md` 실습 가이드** (U8): 단계별 PowerShell 명령, 각 단계에서 보여야 할 출력, 스스로 확인할 질문, 원복 절차
+- [ ] **E10·E11 실습 (사용자)** → 출력 전달
+- [ ] E10·E11 리포트 (사용자 출력으로 작성)
+- [ ] README: 실험 표·결정 기록·비보장 절 갱신
+- [ ] `git commit -m "step 7: ..."`
+
 ## 후속 (이번 범위 밖, §13)
 
 - [x] ~~E8 — 워커 kill × `acks_late` × `visibility_timeout`~~ → 6단계에서 완료 (SQS 전용, E9 DLQ 포함)
 - [ ] `outbox.job_id UNIQUE` 해제 + `version`
-- [ ] 다중 발행자 SKIP LOCKED / 즉시 발행 + 주기 복구 / `SENT + PENDING` 탐지
+- [ ] 다중 발행자 SKIP LOCKED / 즉시 발행 + 주기 복구 (`SENT + PENDING` 탐지는 7단계로 승격)
