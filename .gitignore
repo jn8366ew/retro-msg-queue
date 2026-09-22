@@ -2,6 +2,14 @@
 .env
 insurance_message_queue_interview_notes_2026-09-16.md
 retrospective.md
+practice/
+*.log
+.env.*
+!.env.example
+
+# --- Claude Code 개인 설정 ---
+.claude/settings.local.json
+CLAUDE.local.md
 
 # --- Python ---
 __pycache__/
