@@ -80,7 +80,7 @@
 
 ## 7단계 — `SENT + PENDING` 탐지·복구 (R20~R22)
 
-구현·테스트·실습 가이드 완료 (2026-09-21). **재개 지점: 사용자 실습** — [practice/step7.md](practice/step7.md). 결정: 새 테이블 `job_executions`, 4분류(not_started·running·stalled·gave_up), T=60초, 수동 `run.py reconcile`, 미완료 실행 3건에서 포기.
+완료 (2026-09-22). [E10](reports/E10-20260922-1.md) · [E11](reports/E11-20260922-1.md). 결정: 새 테이블 `job_executions`, 4분류(not_started·running·stalled·gave_up), T=60초, 수동 `run.py reconcile`, 미완료 실행 3건에서 포기.
 
 - [x] `app/models.py`: `JobExecution` (dev-plan §4) — `create_all`이 생성
 - [x] `app/tasks.py`: 시작 기록(계산 전 별도 커밋), 종료 기록(채택과 같은 트랜잭션, 세 반환 경로 모두)
@@ -89,10 +89,10 @@
 - [x] `tests/`: 4분류 판정과 reconcile의 재발행·거부를 AWS 없이 고정 (`test_reconcile.py` 7건, 전체 25건 통과)
 - [x] 동작 확인(Claude): 실제 워커로 사망 → `stalled` → `reconcile` → 재발행 → `DONE`(실행 기록 2행) 배선만 확인, `--stale-after 5`. 실험 본편은 하지 않았다
 - [x] **`practice/step7.md` 실습 가이드** (U8): 단계별 PowerShell 명령, 각 단계에서 보여야 할 출력, 스스로 확인할 질문, 원복 절차
-- [ ] **E10·E11 실습 (사용자)** → 출력 전달
-- [ ] E10·E11 리포트 (사용자 출력으로 작성)
-- [ ] README: 실험 표·결정 기록·비보장 절 갱신
-- [ ] `git commit -m "step 7: ..."`
+- [x] **E10·E11 실습 (사용자)** → 출력 전달 — ①(출력 미보관)·①-심화(미실행)를 뺀 전 단계. ②·③ 겹침, ④ 앞 초기화 생략은 리포트에 기록
+- [x] E10·E11 리포트 (사용자 출력 + 실험 직후 DB·워커 로그 조회로 작성) — 네 칸 모두 관측, 복구·격리 존중·상한 모두 기대대로. E11ⓐ 재발송 30.1초 지연은 원인 미확인
+- [x] README: 실험 표·실측 하이라이트 5·결정 기록 R20~R22·비보장 절 갱신
+- [x] `git commit -m "step 7: ..."` → **`SENT + PENDING` 탐지·복구 완료 (E10·E11)**
 
 ## 후속 (이번 범위 밖, §13)
 

@@ -169,7 +169,14 @@ docker compose exec api python experiments/run.py backlog --detail
 
 ### ③ `stalled` — 실행 중에 워커가 죽었다 (E8 대조군 재현)
 
-초기화한다. `TASK_DELAY_SEC=20`은 그대로 두고, `acks_late`는 기본값(False)이다.
+②의 업무가 끝난 뒤(20초) 초기화한다. 건너뛰면 ②의 업무가 ③의 kill에 함께 끊긴다.
+
+```powershell
+docker compose exec postgres psql -U app -d app `
+  -c "TRUNCATE outbox_events, jobs RESTART IDENTITY CASCADE;"
+```
+
+`TASK_DELAY_SEC=20`은 그대로 두고, `acks_late`는 기본값(False)이다.
 
 ```powershell
 docker compose exec api python experiments/run.py create `
