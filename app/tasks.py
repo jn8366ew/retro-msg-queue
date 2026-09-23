@@ -91,7 +91,7 @@ def send_compute(job_id: int, event_id: int | None) -> str:
 
     브로커가 죽었을 때 빨리 실패하도록 전용 연결을 쓴다 (R9). `task_publish_retry=False`는
     publish 래퍼만 끄고, 연결 수립은 kombu `retry_over_time`이 따로 재시도한다. 실측값은
-    README 결정 기록 참조. `broker_connection_retry*`는 워커 전용이라 여기에 영향이 없다.
+    docs/decisions.md 참조. `broker_connection_retry*`는 워커 전용이라 여기에 영향이 없다.
     전용 연결이므로 워커의 재접속 정책은 건드리지 않는다.
     """
     args = [job_id, event_id]
